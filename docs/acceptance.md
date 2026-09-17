@@ -696,3 +696,48 @@ once switched on"），不是只靠手工验证。
 **没解决的**：中继的 ~512 KB/s 上限没变，首屏仍是 ~65 秒（但变成"有进度、能断点、
 二访秒进"）。要真提速得动 `ui/config` 让 App 桌面别把游戏嵌在 fnconnect 域名的
 iframe 里（游戏 iframe 继承中继域名，所有资源都走中继），那是另一件事。
+
+## §19 真机升级 1.0.2 → 1.0.3（x86NAS）
+
+**为什么要单独记**：`app install-fpk` **不支持覆盖安装**，真机升级只能
+"卸载 → 装"。所以每次升级都要押上用户几十小时的存档，这一节就是这条链路的证据。
+
+**动手前先把存档拿出来。** 不用登录 webdav，游戏自己就有导出接口：
+
+```bash
+curl --noproxy '*' http://<nas>:8980/admin/api/save/export -o before.json
+```
+
+（注意是 **`/admin/api/save/export`**——路由挂在 admin 下，`/api/save/export` 是 404。）
+本次导出 20605 字节，`account=guest326` / `uid=10001` / `name=蛙仔` / `clover=6062`。
+
+**升级链路**：
+
+| 步骤 | 命令 | 结果 |
+|---|---|---|
+| 卸载 | `app uninstall frog-nas --yes` | `Uninstalled app frog-nas` |
+| 数据目录 | `file ls /vol1/@appdata/frog-nas/data` | **仍在**（`uninstall_callback` 刻意不删，且 `uninstall_init` 另存了 `backups/pre-uninstall-*` 快照） |
+| 安装 | `app install-fpk dist/frog-nas-1.0.3-cli.fpk --volume-id 1 --yes` | `Started install task …` → `app status` 显示 `version 1.0.3 / status running` |
+
+⚠ 装在真机上的是 **`-cli` 变体**（`DEP_APPS=none`）。正式包声明了
+`install_dep_apps = nodejs_v22`，`trim-cli app install-fpk` 会直接拒绝
+（`dependency app changes that require App Center UI`）。那一行只影响"安装时是否
+顺带装 Node.js"，与代码、端口、数据目录无关，所以它验出来的结论对正式包同样成立。
+
+**装完在真机上打点**（内网 192.168.31.87，必须 `--noproxy '*'`，否则会被系统代理劫持）：
+
+| 断言 | 实测 |
+|---|---|
+| 服务起来 | `/api/health` → `{"ok":true,"engine":true,...}`，`uptimeSec` 从 0 重新计 |
+| 闸门真的注入了 | 首页 53914 字节，含 `__frogPreload` ×2、`__notice` ×22 |
+| 清单接口 | `/__preload/manifest` → 297136 字节，`build = 1.0.3-25f48b285138`、`season = season34`、**blocking 91 个 / 32.5 MB**、**optional 3787 个 / 225.4 MB** |
+| 资源缓存头 | `/resource/China/default.res.json` → `Cache-Control: public, max-age=604800` |
+| **存档没丢** | `uid / name / createTime / clover / ticket / curAchieve / museumUnlocked / pictures` **全部逐项一致**；`data/save/` 下仍只有原那一个 `frog.offline.save.json` |
+
+**一处看着像问题、实际不是的差异**：升级后导出的 `account` 由 `guest326` 变成 `api`。
+这是**会话标签**不是存档内容——服务端的内置 BotClient 用 `account: 'api'`
+（`src/server.js`），重启后玩家还没连上 WS，快照里记的就是 bot 那个会话。判据是
+`createTime` 一字未变：如果引擎真的新起了一份默认存档，`createTime` 会是当下时间。
+
+**顺带**：`__saveReport.saves` 由 204 降到 8，那是"本次进程启动以来写了几次盘"，
+不是存档次数——1.0.2 那会儿进程已跑了 3529 秒。
