@@ -43,6 +43,21 @@ AI/外部程序 ─Bearer─▶ /api/* ── Bot 客户端（同一套 wire 协
 > 下面的 Docker 路径依然可用，两条路并存、数据目录不同（原生包的数据在
 > `/vol1/@appdata/frog-nas/`）。
 
+装法有两种，任选：
+
+```text
+① 直接下包：Releases 页 → frog-nas-1.0.0.fpk → 应用中心「手动安装」
+   https://github.com/Kasbuky-sudo/frog-nas/releases/tag/v1.0.0
+
+② 加应用源（以后有新版本会在应用中心里直接提示更新）
+   https://github.com/Kasbuky-sudo/FnDepot
+```
+
+②里的源就是本项目的发布渠道，索引遵循
+[FnDepot 外部应用源 V2 规范](https://github.com/EWEDLCM/FnDepot#readme)。
+包比较大（237MB），因为它内含完整的游戏运行时资源；**源码仓库里没有这些**，
+见下面「源获取与更新」。
+
 ### 0. 你需要什么
 
 - 一个解包后的 APK 目录（含 `assets/game/` 与 `resource/China/`）
