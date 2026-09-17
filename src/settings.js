@@ -33,7 +33,7 @@ const EDITABLE_ENV = [
 /** The events a push channel can subscribe to.
  *
  *  Defaults reflect what a player actually wants pushed while away: the frog leaving
- *  and coming home (with what it brought), a postcard, the garden ripening, and a
+ *  and coming home (with what it brought), a postcard, the garden filling up, and a
  *  visitor. `clover_ready` is ON because it is the one event that fires purely from
  *  the world clock -- with nothing else happening, it is what tells you the game is
  *  still alive. The rest are opt-in. */

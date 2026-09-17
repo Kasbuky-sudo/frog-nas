@@ -349,12 +349,42 @@ test('menu: the 编辑 cover swallows the repurposed plaque\'s own tap', () => {
   // The plaque underneath still has its original TOUCH_TAP listener (which would
   // open the 做贺卡 activity), so the cover must stop those events.
   assert.match(MENU_SHIM, /stopImmediatePropagation/);
-  assert.match(MENU_SHIM, /'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend'/);
+  assert.match(MENU_SHIM, /'pointerdown', 'pointerup', 'mousedown', 'mouseup'/);
   // click is deliberately NOT in that swallow list: it carries its own listener
   // that both swallows and opens the editor.
   assert.match(MENU_SHIM, /editorHit\.addEventListener\('click', function \(e\) \{/);
   // And it must be OPAQUE, because it replaces baked-in art rather than adding to it.
   assert.match(MENU_SHIM, /background:linear-gradient\(160deg,#f0d089/);
+});
+
+test('menu: 编辑 opens from a TOUCH, not only from a mouse click', () => {
+  // Regression (reported from a phone): touchstart/touchend used to go through the
+  // same preventDefault()ing swallow as the mouse events, and a default-prevented
+  // touch never gets a synthesized `click`. Desktop was fine -- mousedown/mouseup
+  // do not gate `click` -- so the button looked correct and did nothing on a phone.
+  const TS = /editorHit\.addEventListener\('touchstart', function \(e\) \{[\s\S]*?\}, \{ capture: true, passive: true \}\);/;
+  const TE = /editorHit\.addEventListener\('touchend', function \(e\) \{[\s\S]*?\}, \{ capture: true, passive: true \}\);/;
+  const ts = MENU_SHIM.match(TS);
+  const te = MENU_SHIM.match(TE);
+  assert.ok(ts, 'touchstart listener present');
+  assert.ok(te, 'touchend listener present');
+  // The action has to run from touchend itself: that is the fix.
+  assert.match(te[0], /activate\(\)/);
+  // Neither touch event may cancel the gesture any more -- that is what killed the
+  // click, and it also blocked the menu from scrolling off this button.
+  assert.doesNotMatch(te[0], /preventDefault/);
+  assert.doesNotMatch(ts[0], /preventDefault/);
+  // A touch only counts as a tap if it did not travel: a drag starting here is the
+  // menu scrolling and must not open the editor.
+  assert.match(te[0], /moved > TAP_SLOP/);
+  assert.match(te[0], /Date\.now\(\) - start\.at > TAP_MS/);
+  assert.match(MENU_SHIM, /addEventListener\('touchcancel'/);
+  // Since nothing cancels the gesture now, a compat click follows touchend; it must
+  // be ignored once, or the single tap would toggle twice and appear to do nothing.
+  assert.match(MENU_SHIM, /Date\.now\(\) - touchAt < CLICK_AFTER_TOUCH_MS/);
+  // The retry path is shared by both routes, so it cannot live inside the click
+  // handler -- that is exactly the shape that made touch-only devices fail.
+  assert.match(MENU_SHIM, /function activate\(\)/);
 });
 
 test('menu: positions overlays from the live plaque rects', () => {

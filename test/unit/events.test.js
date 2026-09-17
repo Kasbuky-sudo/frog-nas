@@ -16,8 +16,8 @@ function baseState(over) {
     frog: { status: 0, motion: 0 },
     travel: { departAt: 0, returnAt: 0, tripCount: 0 },
     mails: [],
-    // A garden with nothing ripe, so the clover_ready crossing does not fire in
-    // tests that are about something else.
+    // A garden with nothing ready and nothing growing, so clover_ready cannot
+    // fire in tests that are about something else.
     clovers: [
       { clover_id: 1, element: 0, sprite: 1, last_harvest: -1, rebirth_span: 300 },
       { clover_id: 2, element: 0, sprite: 1, last_harvest: -1, rebirth_span: 300 },
@@ -189,59 +189,109 @@ test('derive: a DIFFERENT visitor being already served is not a gift', () => {
   assert.ok(!evs.includes('visitor_gift'));
 });
 
-test('derive: the garden ripening is reported on the crossing', () => {
+/** A field of `n` slots, each with the given last_harvest / span. */
+function field(n, lh, span, over) {
+  return Array.from({ length: n }, (_, i) => ({
+    clover_id: i + 1, element: 0, sprite: 1,
+    last_harvest: lh, rebirth_span: span, ...(over || {}),
+  }));
+}
+
+test('derive: the garden fires only when the LAST slot finishes, not the first', () => {
+  // The reported bug: 20 slots each regrow on their own timer, so the first one
+  // ripens hours before the batch is done. Firing there announced "1 株长好了"
+  // and then said nothing about the other 19.
   const now = Math.floor(Date.now() / 1000);
-  // BEFORE: every slot is either growing (just harvested) or empty -> 0 ready.
-  const before = baseState({
-    clovers: [
-      { clover_id: 1, element: 0, sprite: 1, last_harvest: now, rebirth_span: 7200 },
-      { clover_id: 2, element: 0, sprite: 1, last_harvest: -1, rebirth_span: 300 },
-    ],
+
+  // BEFORE: the whole field was just harvested -> every slot is growing.
+  const allGrowing = baseState({ clovers: field(20, now, 7200) });
+  // AFTER the first slot ripens: 1 ready, 19 still growing. Must stay silent.
+  const oneRipe = baseState({
+    clovers: field(1, 0, 300).concat(field(19, now, 7200)),
   });
-  // AFTER: both are ripe, and one of them is a four-leaf clover.
+  assert.ok(
+    !eventsOf(allGrowing, oneRipe).includes('clover_ready'),
+    'one ripening clover must NOT notify while the rest are still growing');
+
+  // AFTER the last slot ripens: nothing growing, everything ready -> NOW notify.
+  const full = baseState({ clovers: field(20, 0, 300) });
+  const evs = derive(snapshot(oneRipe), snapshot(full), full, GD, []);
+  const ready = evs.find((e) => e.event === 'clover_ready');
+  assert.ok(ready, 'the last slot ripening fires clover_ready');
+  assert.equal(ready.data.ready, 20);
+  assert.equal(ready.data.total, 20);
+  assert.equal(ready.data.empty, 0);
+  assert.equal(ready.data.fourLeaf, false);
+  assert.match(ready.body, /全部长好了/);
+
+  // ...and it does not repeat while the field merely stays full.
+  assert.ok(!eventsOf(full, full).includes('clover_ready'));
+});
+
+test('derive: a four-leaf clover in the finished batch is called out', () => {
+  const now = Math.floor(Date.now() / 1000);
+  const before = baseState({ clovers: field(2, now, 7200) });
   const after = baseState({
     clovers: [
       { clover_id: 1, element: 0, sprite: 1, last_harvest: 0, rebirth_span: 300 },
       { clover_id: 2, element: 1, sprite: 1, last_harvest: 0, rebirth_span: 300 },
     ],
   });
-
-  const evs = derive(snapshot(before), snapshot(after), after, GD, []);
-  const ready = evs.find((e) => e.event === 'clover_ready');
-  assert.ok(ready, 'clover_ready fired on the 0 -> 2 crossing');
+  const ready = derive(snapshot(before), snapshot(after), after, GD, [])
+    .find((e) => e.event === 'clover_ready');
+  assert.ok(ready, 'clover_ready fired when the field filled');
+  assert.equal(ready.data.fourLeaf, true);
   assert.equal(ready.data.ready, 2);
-  assert.equal(ready.data.fourLeaf, true, 'the four-leaf one is called out');
-  assert.equal(ready.data.total, 2);
-  assert.match(ready.body, /三叶草长好了/);
   assert.match(ready.body, /四叶草/);
 });
 
-test('derive: a garden that STAYS ripe does not re-notify', () => {
-  const ripe = [
-    { clover_id: 1, element: 0, sprite: 1, last_harvest: 0, rebirth_span: 300 },
-    { clover_id: 2, element: 0, sprite: 1, last_harvest: 0, rebirth_span: 300 },
-  ];
-  // Still 2 ready -> no new event; the crossing already happened.
+test('derive: a garden that STAYS full does not re-notify', () => {
+  const ripe = field(2, 0, 300);
+  // Still full -> no event; the crossing already happened.
   assert.ok(!eventsOf(baseState({ clovers: ripe }), baseState({ clovers: ripe })).includes('clover_ready'));
+});
 
-  // 2 -> 3 (one more ripened) is NOT a 0-crossing, so also silent.
-  const three = ripe.concat([{ clover_id: 3, element: 0, sprite: 1, last_harvest: 0, rebirth_span: 300 }]);
-  assert.ok(!eventsOf(baseState({ clovers: ripe }), baseState({ clovers: three })).includes('clover_ready'));
+test('derive: harvesting one slot out of a full field re-arms the notification', () => {
+  const now = Math.floor(Date.now() / 1000);
+  const full = baseState({ clovers: field(3, 0, 300) });
+  // One slot picked: it starts regrowing, so the field is no longer full.
+  const picked = baseState({
+    clovers: field(1, now, 7200).concat(field(2, 0, 300)),
+  });
+  assert.ok(!eventsOf(full, picked).includes('clover_ready'), 'picking a slot is not an event');
+  // It comes back -> the field is full again -> one more notification.
+  assert.ok(eventsOf(picked, full).includes('clover_ready'));
 });
 
 test('derive: an empty garden does not fire clover_ready', () => {
-  const empty = [
-    { clover_id: 1, element: 0, sprite: 1, last_harvest: -1, rebirth_span: 300 },
-    { clover_id: 2, element: 0, sprite: 1, last_harvest: -1, rebirth_span: 300 },
-  ];
+  const empty = field(2, -1, 300);
   assert.ok(!eventsOf(baseState({ clovers: empty }), baseState({ clovers: empty })).includes('clover_ready'));
+  // A field that was cleared slot by slot is not "full" either.
+  assert.ok(!eventsOf(baseState({ clovers: field(2, 0, 300) }), baseState({ clovers: empty }))
+    .includes('clover_ready'));
 });
 
-test('derive: a growing garden does not fire clover_ready', () => {
+test('derive: a bare patch does not block the field from counting as full', () => {
+  // An empty slot has nothing growing in it, so it cannot be "still coming".
+  // 19 planted slots, all ripe -> the field is as grown as it can be.
   const now = Math.floor(Date.now() / 1000);
-  const growing = [
-    { clover_id: 1, element: 0, sprite: 1, last_harvest: now, rebirth_span: 7200 },
-  ];
+  const before = baseState({
+    clovers: field(19, now, 7200).concat([{ clover_id: 20, element: 0, sprite: 1, last_harvest: 0, rebirth_span: 300 }]),
+  });
+  const after = baseState({
+    clovers: field(19, 0, 300).concat([{ clover_id: 20, element: 0, sprite: 1, last_harvest: -1, rebirth_span: 300 }]),
+  });
+  const ready = derive(snapshot(before), snapshot(after), after, GD, [])
+    .find((e) => e.event === 'clover_ready');
+  assert.ok(ready, 'the last growing slot finishing is the trigger, bare patch or not');
+  assert.equal(ready.data.ready, 19);
+  assert.equal(ready.data.total, 20);
+  assert.equal(ready.data.empty, 1, 'the bare patch is reported, so 19/20 is distinguishable from 20/20');
+});
+
+test('derive: a garden still growing does not fire clover_ready', () => {
+  const now = Math.floor(Date.now() / 1000);
+  const growing = field(1, now, 7200);
   assert.ok(!eventsOf(baseState({ clovers: growing }), baseState({ clovers: growing })).includes('clover_ready'));
 });
 

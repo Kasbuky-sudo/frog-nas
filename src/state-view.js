@@ -46,6 +46,8 @@ function cloverView(state, nowSec) {
     };
   });
   const ready = out.filter((c) => c.status === 'ready');
+  const growing = out.filter((c) => c.status === 'growing');
+  const empty = out.filter((c) => c.status === 'empty');
   return {
     slots: out,
     total: out.length,
@@ -53,6 +55,17 @@ function cloverView(state, nowSec) {
     readySlots: ready.map((c) => c.slot),
     fourLeafReady: ready.filter((c) => c.fourLeaf).map((c) => c.slot),
     nextReadyAt: out.reduce((acc, c) => (c.readyAt && (!acc || c.readyAt < acc) ? c.readyAt : acc), null),
+    /** Nothing still growing and something to pick -- "整片长满了".
+     *  The push notification fires on exactly this condition (see
+     *  src/push/events.js), so the API and the notification can never disagree
+     *  about what 长满 means. Empty (never planted) slots do not block it: there
+     *  is nothing growing in them. */
+    full: growing.length === 0 && ready.length > 0,
+    growingCount: growing.length,
+    emptyCount: empty.length,
+    /** When the LAST growing slot finishes, i.e. when the field becomes full --
+     *  NOT the same question as `nextReadyAt`, which is the earliest one. */
+    fullAt: growing.reduce((acc, c) => (c.readyAt && (!acc || c.readyAt > acc) ? c.readyAt : acc), null),
   };
 }
 

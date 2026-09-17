@@ -41,6 +41,9 @@ function mailKey(m) {
  */
 function snapshot(state) {
   const mails = Array.isArray(state.mails) ? state.mails : [];
+  /* Classified once per pass: the four clover fields all read from this, so the
+     20-slot scan is not repeated five times every tick. */
+  const cl = cloverCounts(state);
   return {
     frogStatus: Number((state.frog || {}).status),
     tripCount: Number((state.travel || {}).tripCount) || 0,
@@ -59,13 +62,21 @@ function snapshot(state) {
     pictureCount: (state.pictures || []).length,
     pendingPictures: (state.albumPending || []).length + (state.albumPendingVisit || []).length,
     specialtyCount: (state.specialtys || []).length,
-    /** Ready-to-harvest clovers, so "the garden is ripe" can be reported without
+    /** Ready-to-harvest clovers, so "the garden is full" can be reported without
      *  re-deriving the engine's ripeness rule here. */
-    cloverReady: cloverReadyCount(state),
+    cloverReady: cl.ready.length,
+    /** Slots still regrowing. Carried in the snapshot because "长满了" is the
+     *  crossing of THIS to zero -- not of `cloverReady` away from zero. */
+    cloverGrowing: cl.growing,
+    /** True only when nothing is left growing and there is something to pick.
+     *  Precomputed so `derive` compares one boolean instead of re-deriving the
+     *  engine's rule, and so the API and logs expose the same notion of "full". */
+    cloverFull: cloverFull(cl),
     /** ...and how many of those are the four-leaf kind, which yields a house ITEM
      *  instead of clover -- worth calling out separately in the notification. */
-    fourLeafReady: cloverFourLeafCount(state),
-    cloverTotal: (state.clovers || []).length,
+    fourLeafReady: cl.ready.filter((s) => Number(s.element) === 1).length,
+    cloverTotal: cl.total,
+    cloverEmpty: cl.empty,
     specialtyIds: specialtyIdsIn(state),
     ticket: Number(state.ticket) || 0,
     clover: Number(state.clover) || 0,
@@ -77,35 +88,42 @@ function snapshot(state) {
 }
 
 /**
- * How many clover slots are harvestable right now.
+ * Classify every clover slot the way the engine's own `cloverStatus` does:
+ * `last_harvest === -1` is an empty slot, a `last_harvest + rebirth_span` still in
+ * the future is growing, and anything else is ready.
  *
- * This mirrors the engine's own `cloverStatus`: `last_harvest === -1` is an empty
- * slot, a `last_harvest + rebirth_span` still in the future is growing, and
- * anything else is ready. Counted rather than listed, because the event only needs
- * the crossing from "nothing to pick" to "something to pick".
+ * One classifier for all three questions the events ask (how many are ready, how
+ * many are still growing, is the field full), so the rule cannot drift between
+ * them -- and so `derive` never re-derives engine behaviour.
+ *
+ * @returns {{ready: Array, growing: number, empty: number, total: number}}
  */
-function cloverReadyCount(state) {
-  return readySlots(state).length;
-}
-
-/** How many of the ready slots are four-leaf clovers. */
-function cloverFourLeafCount(state) {
-  return readySlots(state).filter((s) => Number(s.element) === 1).length;
-}
-
-/** The slots the engine would call 'ready' right now. */
-function readySlots(state) {
+function cloverCounts(state) {
   const slots = Array.isArray(state.clovers) ? state.clovers : [];
   const now = Math.floor(Date.now() / 1000);
-  const out = [];
+  const out = { ready: [], growing: 0, empty: 0, total: 0 };
   for (const s of slots) {
-    if (!s) continue;
+    if (!s) continue;                                                  // a hole
+    out.total++;
     const lh = Number(s.last_harvest);
-    if (lh === -1) continue;                                          // empty
-    if (lh > 0 && lh + Number(s.rebirth_span || 0) > now) continue;    // growing
-    out.push(s);
+    if (lh === -1) { out.empty++; continue; }                          // empty
+    if (lh > 0 && lh + Number(s.rebirth_span || 0) > now) { out.growing++; continue; }
+    out.ready.push(s);                                                 // ripe
   }
   return out;
+}
+
+/**
+ * Is the garden FULL -- nothing left growing, and something to pick?
+ *
+ * This is what the notification fires on. Empty slots deliberately do not block
+ * it: an empty slot has nothing growing in it, so it cannot be "still coming", and
+ * a fully cleared field has nothing ready either -- it stays silent on its own.
+ *
+ * @param {{ready: Array, growing: number}} counts from cloverCounts()
+ */
+function cloverFull(counts) {
+  return counts.growing === 0 && counts.ready.length > 0;
 }
 
 /** Item ids of the souvenirs the player owns, for diffing between snapshots. */
@@ -161,7 +179,7 @@ const EVENT_LABELS = {
   return: '青蛙回家了',
   visitor_arrive: '有访客来了',
   visitor_gift: '访客留下了回礼',
-  clover_ready: '三叶草熟了',
+  clover_ready: '三叶草长满了',
   lottery: '抽奖券够了',
   title_unlock: '解锁了新称号',
   furniture_finish: '家具做好了',
@@ -313,20 +331,38 @@ function derive(prev, next, state, gd, recentPushes) {
     });
   }
 
-  // ---- clovers ripened (菜熟了)
+  // ---- the garden is FULLY grown (三叶草长满了)
   //
-  // Reported on the CROSSING (0 -> n), not on every pass, so a garden that stays
-  // ripe does not re-notify. The engine regrows each slot on its own timer, so this
-  // is the one event that fires purely from the world's clock with nothing else
-  // happening -- which makes it the most useful one to have running unattended.
-  if (prev.cloverReady === 0 && next.cloverReady > 0) {
+  // Fired on the crossing "something is still growing -> nothing is", NOT on
+  // "nothing was ready -> something is" as it used to be.
+  //
+  // Why: the field has 20 slots (CLOVER_SLOTS) and each one regrows on its OWN
+  // timer (mean 2h, sd 30m -- the engine's rollCloverRebirth). So after a harvest
+  // the first slot ripens hours before the batch is done, and reporting that
+  // crossing told the player "院子里的三叶草长好了" while 19 were still growing --
+  // premature, and then silent about the rest. Waiting for the last slot makes the
+  // message actionable: go pick the whole field. It still fires exactly once per
+  // harvest cycle, because a garden that STAYS full never crosses again, and a
+  // garden that is just never harvested never crosses either.
+  //
+  // This remains the only event that fires purely from the world's clock with
+  // nothing else happening, which makes it the most useful one to have running
+  // unattended.
+  if (next.cloverFull && !prev.cloverFull) {
     const fourLeaf = Number(next.fourLeafReady) > 0;
     events.push({
       event: 'clover_ready',
       title: EVENT_LABELS.clover_ready,
-      body: '院子里有 ' + next.cloverReady + ' 株三叶草长好了'
-        + (fourLeaf ? '（其中有四叶草）' : '') + '，可以去收了。',
-      data: { ready: next.cloverReady, fourLeaf, total: next.cloverTotal },
+      body: '院子里的三叶草全部长好了（' + next.cloverReady + ' 株'
+        + (fourLeaf ? '，含四叶草' : '') + '），可以去收了。',
+      data: {
+        ready: next.cloverReady,
+        fourLeaf,
+        total: next.cloverTotal,
+        /** Slots that were empty (never planted) when it filled, so a caller can
+         *  tell "20 of 20" from "19 of 20 with one bare patch". */
+        empty: next.cloverEmpty,
+      },
     });
   }
 

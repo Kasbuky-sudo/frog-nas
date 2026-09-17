@@ -74,6 +74,10 @@ curl -s "$FROG_API_BASE/api/state"
     "readySlots": [1,2,3,...],  // 可以收的格号，直接传给收草接口
     "fourLeafReady": [],        // 熟了而且是四叶草的格号
     "nextReadyAt": 1789645881,  // 最近一株什么时候熟
+    "full": true,               // 整片长满了（没有还在长的、且有可收的）
+    "growingCount": 0,          // 还在长的格数
+    "emptyCount": 0,            // 空（没种）的格数
+    "fullAt": null,             // 最后一株什么时候熟 = 什么时候长满（≠ nextReadyAt）
     "slots": [ { "slot":1, "status":"ready", "fourLeaf":false, "readyAt":null } ]
   },
   "storage": {
@@ -104,7 +108,11 @@ curl -s "$FROG_API_BASE/api/state"
 ## 决策流程
 1. `GET /api/health`，`engine` 必须是 `true`。
 2. `GET /api/state`，然后按需求分流：
-   - `clovers.readyCount > 0` → 用 `frog-harvest` 收草。
+   - `clovers.readyCount > 0` → 用 `frog-harvest` 收草。**注意 `readyCount > 0` 不等于
+     "长满了"**：20 格各自独立重生（平均 2 小时一株），所以经常是"熟了两三株、其余还在长"。
+     只有 `clovers.full == true` 才是整片长完——推送通知也是按 `full` 发的，别用
+     `readyCount` 去解释那条通知。只熟了一部分时，报 `fullAt`（预计什么时候长满）
+     比催用户现在去收更有用。
    - `frog.waitingForBag == true` → 用 `frog-prepare` 备行李（这是蛙不出门的原因）。
    - `guest != null && guest.served == false` → 用 `frog-visitor` 招待。
    - `lottery.canDraw == true` → 用 `frog-lottery` 抽奖。
@@ -129,7 +137,7 @@ curl -s "$FROG_API_BASE/api/state"
 | `depart` | 青蛙出发 |
 | `return` | 青蛙回家（**会说明带了什么**：几张照片、哪些特产、三叶草/券增量） |
 | `postcard` | 收到新明信片 |
-| `clover_ready` | 院子里的三叶草长好了（**纯靠时间触发**，没有别的事也会响） |
+| `clover_ready` | 院子里的三叶草**全部**长好了才发（20 格各自独立重生，等最后一格长完；见 `src/push/events.js`）。**纯靠时间触发**，没有别的事也会响 |
 | `visitor_arrive` / `visitor_gift` | 有访客来 / 招待后的回礼 |
 | `mail` / `lottery` / `title_unlock` / `furniture_finish` | 新邮件 / 券够了 / 新称号 / 家具做好 |
 

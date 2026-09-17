@@ -536,3 +536,95 @@ suite('integration: a websocket client drives the same world the API sees', asyn
     assert.ok(bPushes.includes('client.load_role'), 'a real push arrived at the other tab');
   });
 });
+
+/**
+ * The clover notification, end to end: a real server, a real engine, a real
+ * receiver.
+ *
+ * Why it is not only unit-tested: the field has 20 slots that regrow on their own
+ * independent timers (mean 2h each), so the interesting behaviour only exists in a
+ * LIVING garden. The engine's own GM console is the documented way for a headless
+ * test to reach such a state without waiting hours, so this drives it through
+ * /api/debug/gm.
+ *
+ * The unit tests in test/unit/events.test.js pin the rule itself; this pins the
+ * plumbing -- snapshot -> derive -> dispatcher -> channel -- and the /api/state
+ * fields the skills quote.
+ */
+suite('integration: the clover notification waits for the WHOLE field', async (t) => {
+  const receiver = await startReceiver();
+  const srv = await startServer({ FROG_ENABLE_GM_API: '1' });
+  t.after(async () => {
+    await srv.stop();
+    await receiver.close();
+  });
+
+  const api = srv.api;
+  const cloverPushes = () => receiver.received.filter((x) => x.body && x.body.event === 'clover_ready');
+  const clovers = async () => (await api('GET', '/api/state')).body.clovers;
+
+  await api('PUT', '/api/settings/push', {
+    webhook: { enabled: true, url: 'http://127.0.0.1:' + receiver.port + '/hook' },
+    quietHours: { enabled: false, from: '23:00', to: '07:00' },
+    retry: { attempts: 2, baseDelayMs: 100 },
+  });
+
+  await t.test('a brand-new save is already full, and booting it notifies nobody', async () => {
+    const c = await clovers();
+    assert.equal(c.total, 20);
+    assert.equal(c.readyCount, 20, 'the engine starts every slot ripe');
+    assert.equal(c.full, true);
+    assert.equal(c.growingCount, 0);
+    assert.equal(c.emptyCount, 0);
+    assert.equal(c.fullAt, null, 'nothing is growing, so there is no "will be full at"');
+    await sleep(700);
+    assert.equal(cloverPushes().length, 0, 'the baseline must not fire (dispatcher.prime)');
+  });
+
+  await t.test('clearing the field un-fills it, and that is not an event either', async () => {
+    const r = await api('POST', '/api/debug/gm', { cmd: 'clear_clovers' });
+    assert.equal(r.body.ok, true, JSON.stringify(r.body));
+    const c = await clovers();
+    assert.equal(c.full, false);
+    assert.equal(c.readyCount, 0);
+    assert.equal(c.emptyCount, 20);
+    await sleep(700);
+    assert.equal(cloverPushes().length, 0, 'an empty garden is not a full one');
+  });
+
+  await t.test('the field filling up DOES notify, and says the whole field is ready', async () => {
+    const r = await api('POST', '/api/debug/gm', { cmd: 'harvest_all' });
+    assert.equal(r.body.ok, true, JSON.stringify(r.body));
+    let hit = null;
+    for (let i = 0; i < 40 && !hit; i++) { await sleep(200); hit = cloverPushes()[0]; }
+    assert.ok(hit, 'crossing into "full" must notify');
+    assert.equal(hit.body.data.ready, 20);
+    assert.equal(hit.body.data.empty, 0);
+    assert.match(hit.body.body, /全部长好了/, 'the wording says the WHOLE field, not one plant');
+  });
+
+  await t.test('a garden that stays full does not re-notify', async () => {
+    const before = cloverPushes().length;
+    await sleep(1200);      // several ticks with the garden untouched
+    assert.equal(cloverPushes().length, before);
+  });
+
+  await t.test('harvesting ONE slot is silent, and reports when it will be full again', async () => {
+    const before = cloverPushes().length;
+    const h = await api('POST', '/api/harvest', { slot: 1 });
+    assert.equal(h.body.harvested, 1, JSON.stringify(h.body));
+
+    const c = await clovers();
+    assert.equal(c.readyCount, 19);
+    assert.equal(c.growingCount, 1);
+    assert.equal(c.full, false, 'one slot regrowing means the field is not full');
+    const nowSec = Math.floor(Date.now() / 1000);
+    assert.ok(c.fullAt > nowSec, 'fullAt points at the future: ' + c.fullAt);
+    assert.ok(c.nextReadyAt <= c.fullAt, 'nextReadyAt is the earliest slot, fullAt the last');
+    assert.ok(c.fullAt - nowSec >= 290, 'the engine clamps a rebirth to at least 300s');
+
+    await sleep(1200);
+    assert.equal(cloverPushes().length, before,
+      'a partly-grown field must not notify -- that was the reported bug');
+  });
+});

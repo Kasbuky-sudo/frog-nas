@@ -444,29 +444,84 @@ const MENU_SHIM = `<script>
     cap.textContent = EDITOR_TEXT;
     editorHit.appendChild(cap);
 
+    /* ---- tap plumbing --------------------------------------------------------
+       The cover has two jobs: keep the tap off the plaque underneath (its original
+       TOUCH_TAP listener would open the 做贺卡 activity), and run the toggle.
+
+       The first version only got the first half right, which is why this button was
+       dead on a phone. It preventDefault()ed touchstart/touchend and left the
+       toggle on the click listener -- but a touch whose start or end is
+       default-prevented never gets a synthesized click. Desktop was unaffected
+       (mousedown/mouseup do not gate click), so it tested fine there and did
+       nothing at all on a touch screen.
+
+       So touch now activates from touchend directly, and click stays for
+       mouse/keyboard. Two things that would otherwise bite:
+
+         1. touchstart must NOT preventDefault any more. Keeping the event away from
+            the game only needs stopPropagation (the game's listener is above this
+            element); cancelling the gesture is what killed the click, and it also
+            stopped the menu from scrolling when a drag began on the button.
+         2. Since nothing cancels the gesture now, browsers will synthesize a click
+            after touchend again. A short window after touchend ignores it, or one
+            tap would toggle twice and look like it did nothing. touchend stays the
+            authoritative path, so a real second tap inside that window still works.
+
+       Mouse and pointer events keep the old preventDefault(): they do not gate
+       click, and leaving them alone limits the change to the touch path. */
     var swallow = function (e) {
       e.preventDefault();
       e.stopPropagation();
       if (e.stopImmediatePropagation) e.stopImmediatePropagation();
     };
-    /* Every event the plaque's own handler listens for, swallowed in the capture
-       phase so Egret never sees the tap. click is handled separately below (it
-       needs to run the editor toggle too), so it is not in this list. */
-    ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend']
+    /* Suppression without cancelling: keeps the event from reaching the game's
+       listener while leaving the gesture's default behaviour (scrolling, and the
+       follow-up compat click) intact. */
+    var contain = function (e) {
+      e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    };
+
+    ['pointerdown', 'pointerup', 'mousedown', 'mouseup']
       .forEach(function (t) {
         editorHit.addEventListener(t, swallow, { capture: true, passive: false });
       });
+
+    /* A touch counts as a tap on THIS button only if it stayed put: a drag that
+       happens to start here is the menu scrolling, and must not open the editor. */
+    var TAP_SLOP = 12;                 /* px */
+    var TAP_MS = 700;
+    var CLICK_AFTER_TOUCH_MS = 700;
+    var tapStart = null;
+    var touchAt = 0;
+
+    editorHit.addEventListener('touchstart', function (e) {
+      contain(e);
+      var t = e.changedTouches && e.changedTouches[0];
+      tapStart = t ? { x: t.clientX, y: t.clientY, at: Date.now() } : null;
+    }, { capture: true, passive: true });
+
+    editorHit.addEventListener('touchcancel', function () {
+      tapStart = null;               /* the browser took the gesture over */
+    }, { capture: true, passive: true });
+
+    editorHit.addEventListener('touchend', function (e) {
+      contain(e);
+      var t = e.changedTouches && e.changedTouches[0];
+      var start = tapStart;
+      tapStart = null;
+      if (!start || !t) return;
+      var moved = Math.max(
+        Math.abs(t.clientX - start.x), Math.abs(t.clientY - start.y));
+      if (moved > TAP_SLOP || Date.now() - start.at > TAP_MS) return;
+      touchAt = Date.now();
+      activate();
+    }, { capture: true, passive: true });
+
     editorHit.addEventListener('click', function (e) {
       swallow(e);
-      /* Retry briefly: the probe installs its ball a little after boot, and this
-         button can be tapped before that happens. */
-      if (toggleSaveEditor()) { sync(); return; }
-      var tries = 0;
-      var iv = setInterval(function () {
-        tries++;
-        if (toggleSaveEditor()) { clearInterval(iv); sync(); }
-        else if (tries > 40) clearInterval(iv);
-      }, 100);
+      if (Date.now() - touchAt < CLICK_AFTER_TOUCH_MS) return;   /* touchend ran it */
+      activate();
     }, true);
     document.body.appendChild(editorHit);
     editor = editorHit;
@@ -494,6 +549,21 @@ const MENU_SHIM = `<script>
        instead, so it does not open pinned to an invisible anchor in a corner. */
     if (panel.style.display === 'block') centrePanel(panel);
     return true;
+  }
+
+  /* Open/close the save editor. Retries briefly, because the probe installs its
+     ball a little after boot and this button can be tapped before that happens.
+     Shared by the touch and click paths -- on a phone the click event never
+     arrives (see the tap plumbing in ensureEditor), so this must not live in a
+     click handler. */
+  function activate() {
+    if (toggleSaveEditor()) { sync(); return; }
+    var tries = 0;
+    var iv = setInterval(function () {
+      tries++;
+      if (toggleSaveEditor()) { clearInterval(iv); sync(); }
+      else if (tries > 40) clearInterval(iv);
+    }, 100);
   }
 
   function centrePanel(panel) {
