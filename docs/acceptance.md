@@ -658,3 +658,41 @@ once switched on"），不是只靠手工验证。
 
 **实测**：圆球 `display: none`；`编辑` 开 → `panel=block, pressed=true`，再点 →
 `panel=none, pressed=false`。
+
+## §18 远程首屏加载（v1.0.3）
+
+**症状**：飞牛 App 打不开游戏；走 fnconnect 用浏览器也一样——进度条走得很慢、
+全程 ~512 KB/s、走一会儿就不动了。同一台手机在**内网**用浏览器访问却秒进。
+
+**定位**：竖着读这三条，"慢"只和链路带宽有关。实测首屏要下 **91 个文件 /
+32.5 MB**（图集一项占 20.3 MB），512 KB/s 就是 **65 秒**。而游戏的加载器会
+**突发**发请求，限速链路抢不动就停住——服务端日志全程干净，不是出错，是被饿死。
+所以 §12 的"加长超时"治不了它：那是让等待更久，不是让传输完成。
+
+**改动**（`src/preload.js` + `src/preload-shim.js`，响应期注入，`vendor/` 不动）：
+
+| # | 改动 | 要点 |
+|---|---|---|
+| 1 | 服务端算清单 `GET /__preload/manifest` | 按 `main.min.js` 的两个 `loadGroups` 调用点推导；`.eab` 是下载单位（4558 个资源里 692 个是 bundle 内条目、零请求）；季节组随时钟变 |
+| 2 | 客户端闸门（`<head>` 第一个 script） | 按住 `launcher.js` 那唯一一次 `manifest.json?v=` XHR，先以并发 2 传完阻塞集；20s 无新字节判定假死并重试（4xx 不重试）；localStorage 位图断点续传（按 build 指纹失效）；8 分钟硬上限、30 秒后出跳过按钮，任何失败路径直接放行 |
+| 3 | `/resource/*` 缓存 `no-cache` → `public, max-age=604800` | Egret 不给资源 URL 加 `?v=`（`default.res.json` 0 条 `version`、两份 min.js 0 处 `Math.random`），所以二访是纯缓存命中，不必回来校验 |
+
+**验证环境**：真实 `vendor/` + 真实 `src/server.js` 子进程 + Chromium（playwright-core），
+限速用 CDP `Network.emulateNetworkConditions`。
+
+| 断言 | 结果 |
+|---|---|
+| 闸门真按住了 | **通过**：`launcher.js` 的 `manifest.json?v=` 是第 **98** 个请求，最后一个 `/resource/` 是第 **96** 个——阻塞集进缓存前，游戏一个资源都没要过 |
+| 冷启动完成 | **通过**：91/91 文件，`reason = ok` |
+| 限速下传输持续 | **通过**：32.5 MB / 11.4 s，**最大间隔 1010 ms**（阈值 6 s） |
+| 二访零请求 | **通过**：`reason = warm`、`count = 0`、首个 `manifest.json` 之前 `/resource/` 请求数 **0** |
+| 清单里有缺文件 | **通过**：只请求 1 次（不重试 5 次）、如实报 `partial`、照常放行 |
+| 进度 UI | **通过**：进度条在开屏声明内，`进入游戏` 置灰为「预载中…」，完成后恢复并隐藏 |
+
+单测 `test/unit/preload.test.js` 28 条（清单推导 + 在 `node:vm` 里跑真 shim，
+断言"先落闸 / 只放行一次 / 放行走原型链 / 超时不困住已排队的请求 / 断点与换包失效"）；
+`npm test` 全量 195 条。详见 `docs/first-load.md`。
+
+**没解决的**：中继的 ~512 KB/s 上限没变，首屏仍是 ~65 秒（但变成"有进度、能断点、
+二访秒进"）。要真提速得动 `ui/config` 让 App 桌面别把游戏嵌在 fnconnect 域名的
+iframe 里（游戏 iframe 继承中继域名，所有资源都走中继），那是另一件事。

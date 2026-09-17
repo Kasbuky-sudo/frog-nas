@@ -134,14 +134,30 @@ mkdir -p "${STAGING}/app/server" "${STAGING}/app/ui"
 
 cp "${PKG_DIR}/ICON.PNG" "${PKG_DIR}/ICON_256.PNG" "${STAGING}/"
 
-# manifest：按 DEP_APPS 写暂存副本
+# manifest：按 DEP_APPS 写暂存副本，版本号也从 package.json 落进来。
+# manifest 里的 version 是 fnOS 应用中心真正显示的版本，必须在暂存副本上跟随
+# package.json，否则会出现"包名 1.0.3、应用中心显示 1.0.2"这种两头对不上的情况。
+grep -q '^version[[:space:]]*=' "${PKG_DIR}/manifest" || {
+    echo "packaging/fnOS/manifest 缺少 version 行（打包时无法用 package.json 覆盖）" >&2
+    exit 1
+}
 if [ -n "${DEP_APPS}" ]; then
-    sed "s/^install_dep_apps *=.*/install_dep_apps      = ${DEP_APPS}/" \
+    sed -e "s/^version[[:space:]]*=.*/version               = ${VERSION}/" \
+        -e "s/^install_dep_apps *=.*/install_dep_apps      = ${DEP_APPS}/" \
         "${PKG_DIR}/manifest" > "${STAGING}/manifest"
 else
-    grep -v '^install_dep_apps' "${PKG_DIR}/manifest" > "${STAGING}/manifest"
+    grep -v '^install_dep_apps' "${PKG_DIR}/manifest" \
+        | sed -e "s/^version[[:space:]]*=.*/version               = ${VERSION}/" \
+        > "${STAGING}/manifest"
 fi
 chmod 644 "${STAGING}/manifest" 2>/dev/null || true
+
+# 打包后立刻核对一次：暂存 manifest 的版本必须等于 package.json 的版本。
+grep -q "^version[[:space:]]*= *${VERSION}$" "${STAGING}/manifest" || {
+    echo "暂存 manifest 的 version 不是 ${VERSION}" >&2
+    grep '^version' "${STAGING}/manifest" >&2
+    exit 1
+}
 
 cp -R "${PKG_DIR}/config" "${PKG_DIR}/cmd" "${STAGING}/"
 cp -R "${PKG_DIR}/ui/." "${STAGING}/app/ui/"

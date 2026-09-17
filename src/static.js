@@ -32,6 +32,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { preloadShim } = require('./preload-shim');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -860,6 +861,29 @@ function injectNoticeExtra(html) {
 }
 
 /**
+ * First-load preloader: `PRELOAD_SHIM` must run before EVERYTHING else, so it is
+ * inserted separately and applied last, landing ahead of the five shims
+ * injectTransportShim puts directly after <head>.
+ *
+ * Kept as its own function rather than folded into the chain above so the
+ * existing shim-order tests keep asserting on exactly what they asserted on
+ * before. The build id is embedded because the shim compares it with the stored
+ * resume ledger on the first tick, before any network round trip — without it
+ * the ledger could not be validated until the manifest arrived.
+ */
+function injectPreload(html, build) {
+  // Idempotent, like injectPortCredit: `window.__frogPreload` is the marker the
+  // shim itself publishes, so a second application is a no-op instead of a
+  // second gate that would hold the game behind a duplicate queue.
+  if (html.indexOf('__frogPreload') !== -1) return html;
+  const m = /<head[^>]*>/i.exec(html);
+  const shim = preloadShim(build);
+  if (!m) return shim + html;
+  const at = m.index + m[0].length;
+  return html.slice(0, at) + '\n' + shim + html.slice(at);
+}
+
+/**
  * Rewrite gameConfig.json's server list to point at this deployment.
  *
  * @param {string} raw     original file contents
@@ -917,11 +941,16 @@ class StaticServer {
    * @param {string} opts.gameDir      vendor/game
    * @param {string} opts.resourceDir  vendor/resource
    * @param {string} [opts.wsPath]
+   * @param {() => string} [opts.getBuild]  the preload build id (src/preload.js).
+   *        Only used to stamp the preloader shim; a missing getter degrades to an
+   *        empty id, which simply means the client can never validate a cached
+   *        resume ledger against it.
    */
   constructor(opts) {
     this.gameDir = opts.gameDir;
     this.resourceDir = opts.resourceDir;
     this.wsPath = opts.wsPath || '/ws';
+    this.getBuild = typeof opts.getBuild === 'function' ? opts.getBuild : () => '';
     // The pristine gameConfig, guaranteed to be the source package's copy even if
     // the served one is ever touched. Populated by fetch-source; falls back to the
     // resource tree so a hand-made vendor/ still works.
@@ -990,7 +1019,10 @@ class StaticServer {
     res.setHeader('Cache-Control', 'no-cache');
     // The port credit is added to the rights notice too, so the overlay names all
     // three parties: Hit-Point (copyright), Balticx (offline build), Kasbuky (port).
-    res.send(injectNoticeExtra(injectPortCredit(injectTransportShim(html))));
+    // injectPreload is applied LAST so its shim lands ahead of the other five: the
+    // first-load gate has to be armed before any game script can issue a request.
+    res.send(injectNoticeExtra(injectPortCredit(
+      injectPreload(injectTransportShim(html), this.getBuild()))));
   }
 
   /** Serve gameConfig.json with this deployment's WS endpoint. */
@@ -1010,8 +1042,14 @@ class StaticServer {
     }));
   }
 
-  /** Serve one static file from vendor/game or vendor/resource. */
-  serveFile(req, res, file, { immutable } = {}) {
+  /**
+   * Serves one of the game's own files (vendor/game or vendor/resource).
+   *
+   * @param {object} [opts]
+   * @param {boolean} [opts.immutable] 真值表示这是内容固定的资源；配 maxAge 决定缓存时长
+   * @param {number}  [opts.maxAge]    seconds; only honoured together with `immutable`
+   */
+  serveFile(req, res, file, { immutable, maxAge } = {}) {
     let st;
     try {
       st = fs.statSync(file);
@@ -1028,14 +1066,15 @@ class StaticServer {
     res.setHeader('Content-Length', String(st.size));
     const name = path.basename(file).toLowerCase();
     if (NO_CACHE.has(name)) res.setHeader('Cache-Control', 'no-cache');
-    else if (immutable) res.setHeader('Cache-Control', 'public, max-age=86400');
-    else res.setHeader('Cache-Control', 'no-cache');
+    else if (immutable) {
+      res.setHeader('Cache-Control', 'public, max-age=' + (Number(maxAge) || 86400));
+    } else res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(file);
   }
 }
 
 module.exports = {
-  StaticServer, MIME, contentType, cspHeader, injectTransportShim,
+  StaticServer, MIME, contentType, cspHeader, injectTransportShim, injectPreload,
   rewriteGameConfig, requestHost, requestProto,
   TRANSPORT_SHIM, ORIENTATION_SHIM, SETTINGS_ENTRY_SHIM, MENU_SHIM,
   XHR_TIMEOUT_SHIM,

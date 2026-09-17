@@ -24,6 +24,7 @@ const { WsBridge } = require('./ws-bridge');
 const { GameData } = require('./gamedata');
 const { BotClient } = require('./bot');
 const { StaticServer } = require('./static');
+const { PreloadPlanner } = require('./preload');
 const { createApiRouter } = require('./api');
 const { PushDispatcher } = require('./push/dispatcher');
 const { PostcardRenderer } = require('./postcard');
@@ -153,17 +154,42 @@ function main() {
         String(code),
         ms + 'ms',
         req.headers.range || '-',
-        String(req.headers['user-agent'] || '-').slice(0, 70),
+        // 完整 UA 而不是截断到 70 字符：1.0.2 排查时最缺的一条信息就是"这条慢请求
+        // 到底来自飞牛 App 的 WebView 还是手机浏览器"，而这一判断恰恰落在被截掉的
+        // 尾段里。X-Forwarded-For 同样必须记 —— 走 fnconnect 中继时对端是回环/内网
+        // 地址，只有它能指出真实来源，否则"内网秒进、外部很慢"这个对比根本看不出来。
+        String(req.headers['x-forwarded-for'] || req.ip || '-').split(',')[0].trim(),
+        String(req.headers['user-agent'] || '-').replace(/\s+/g, ' '),
         req.originalUrl,
-      ].join(' '));
+      ].join(' | '));
     });
     next();
   });
+
+  // ---- 首次加载预载计划（见 src/preload.js 与 docs/first-load.md）
+  //
+  // 首屏要 ~32MB / ~90 个请求，其中 20MB 是 sheet/*.png 图集。冷启动经由 fnconnect
+  // 中继（实测上限 ~512KB/s）就是 60 秒往上，而且游戏自己的加载器是一股脑并发抛出，
+  // 正好撞在中继的限速上——于是进度条爬不动、传到一半断掉。第二次打开秒进，因为响应
+  // 已经在 HTTP 缓存里。
+  //
+  // 这里只负责把"要下什么"算清楚交给客户端；怎么下、怎么续、什么时候放行由
+  // src/preload-shim.js 决定。清单按 build 指纹缓存，换包即失效。
+  const planner = new PreloadPlanner({
+    gameDir: path.join(ROOT, 'vendor', 'game'),
+    resourceDir: path.join(ROOT, 'vendor', 'resource'),
+    language: 'China',                 // index.html 里 window.gameLanguage = "China"
+    version: require(path.join(ROOT, 'package.json')).version,
+  });
+  // 资源树是不变的（换包才变），所以把命中率交给长缓存是对的：max-age 拉长后浏览器
+  // 在窗口期内一次请求都不发。ETag 仍然在，万一某个客户端忽略了 max-age 也只是 304。
+  const RES_MAX_AGE = Number(process.env.FROG_RES_MAX_AGE || 604800);   // 7 天
 
   const staticServer = new StaticServer({
     gameDir: path.join(ROOT, 'vendor', 'game'),
     resourceDir: path.join(ROOT, 'vendor', 'resource'),
     wsPath: '/ws',
+    getBuild: () => planner.build(),
   });
   // Prefer the pristine copy fetch-source kept, so the response rewrite always
   // starts from the source package's bytes.
@@ -197,6 +223,25 @@ function main() {
       }
     }
     res.status(204).end();
+  });
+
+  // ---- /__preload/manifest: 首屏预载清单
+  //
+  // 响应必须 no-store：它带 build 指纹，缓存住会让换包后的客户端拿到旧清单，
+  // 进而按错的位图信任断点续传台账。载荷约 300KB（3877 条 {url,size}），一次
+  // 冷启动只请求一次。
+  app.get('/__preload/manifest', (req, res) => {
+    let plan;
+    try {
+      plan = planner.plan();
+    } catch (e) {
+      // 清单算不出来绝不能拦住玩家：客户端收到非 200 就地放行，游戏照常启动。
+      console.error('[server] preload plan failed: ' + (e && e.stack || e));
+      res.status(500).json({ error: String(e && e.message || e) });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.type('application/json').send(JSON.stringify(plan));
   });
 
   // ---- /asset/postcard/<picId>: composed postcard PNGs.
@@ -249,7 +294,7 @@ function main() {
   app.get('/resource/*', (req, res) => {
     const file = staticServer.resourceFile(req.path);
     if (!file) { res.status(404).type('text/plain').send('not found'); return; }
-    staticServer.serveFile(req, res, file, { immutable: true });
+    staticServer.serveFile(req, res, file, { immutable: true, maxAge: RES_MAX_AGE });
   });
 
   // Everything else falls through to vendor/game: js/, manifest.json,
@@ -296,6 +341,19 @@ function main() {
     console.log('[server]   api    http://<host>:' + PORT + '/api/health');
     console.log('[server]   ws     ws://<host>:' + PORT + '/ws');
     console.log('[server] engine env: ' + JSON.stringify(settings.engineEnv()));
+    // 预热预载计划：首次调用要读 default.res.json + 对 400KB 的 version.json 求哈希，
+    // 并且要为 3877 个文件各做一次 stat()（本机实测 ~180ms）。放在这里做，第一个
+    // 打开页面的浏览器就不用替我们等。
+    try {
+      const plan = planner.plan();
+      console.log('[server] preload build ' + plan.build
+        + ' | blocking ' + plan.blocking.length + ' files / '
+        + (plan.bytes.blocking / 1048576).toFixed(1) + ' MB'
+        + ' | optional ' + plan.optional.length + ' / '
+        + (plan.bytes.optional / 1048576).toFixed(1) + ' MB');
+    } catch (e) {
+      console.error('[server] preload plan warm-up failed: ' + (e && e.message || e));
+    }
   });
 
   // The engine clock and the push diff run on one timer, so the ordering is

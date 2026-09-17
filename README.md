@@ -130,6 +130,25 @@ docker compose up -d --build
   收邮件——这正是推送有意义的前提。
 - **多端同步**：所有引擎消息 fan-out 给全部连接，包括别的标签页触发的动作。
 
+### 第一次打开为什么慢，以及为什么会快
+
+首屏要下 **91 个文件 / 32.5 MB**（17 个引擎脚本 + Egret 配置 + 5 个 `.eab`
+打包资源 + 18 张图集 + 字体动画音乐）。局域网里这是一眨眼的工夫；远程走
+fnconnect 中继只有 ~512 KB/s，就是 **65 秒**。所以第一版会出现"传一会儿网速
+就没了、NAS 不再传数据"——那是限速链路被游戏自己的加载器突发抢带宽抢死的，
+不是服务端出错了（服务端日志全程干净）。
+
+现在进游戏前会先**按服务端算好的清单把首屏资源稳定传完再放行**：进度条显示在
+开屏声明里，「进入游戏」按钮先置灰成「预载中…」；单文件 20 秒没有新字节就判定
+假死、中断重试；进度记在浏览器里，中途关掉页面下次从断点接着传；30 秒后出现
+「跳过预载」按钮，任何失败路径都会直接放行。传完之后再把图鉴／家具／其余季节的
+**225 MB** 在游戏内后台慢慢补完（只在游戏自己没有请求、页面可见时才进行），
+所以**从第二次开始就是纯缓存命中，不再下载**。
+
+想关掉：地址后加 `?nopreload=1`，或让浏览器记住
+`localStorage.__frog_preload_off = '1'`。原理、实测数字与验证方法见
+[docs/first-load.md](docs/first-load.md)。
+
 ---
 
 ## 推送配置
@@ -295,20 +314,28 @@ curl -s http://<NAS_IP>:8980/skills/frog-status/SKILL.md     # 原始 markdown
 npm install
 node scripts/fetch-source.js      # 准备 vendor/
 npm start                         # 本机起在 8980
-npm test                          # 全部测试（140 个）
-npm run test:unit                 # 只跑单测
+npm test                          # 单测 + 集成（195 个）
+npm run test:unit                 # 只跑单测（157 个）
+npm run test:browser:first-load   # 首屏预载：真 Chromium + 限速 + 真 server
+npm run test:browser:touch-tap    # 触摸回归（手机端点不动那类问题）
 npm run audit:network             # 重新生成网络审计报告
 ```
 
-测试分三层：
+测试分四层：
 
 - **单测**（`test/unit/`）：磁盘 localStorage 适配器、gameConfig 改写、
-  webhook 模板渲染、MeoW 请求构造、事件差分、以及
-  **OpenAPI ↔ 路由 ↔ SKILL.md 三方一致性**。
+  webhook 模板渲染、MeoW 请求构造、事件差分、
+  **OpenAPI ↔ 路由 ↔ SKILL.md 三方一致性**，以及**首屏预载清单与闸门逻辑**
+  （`test/unit/preload.test.js` 在 `node:vm` 里跑真 shim，用假 XHR 断言
+  "先落闸、后放行、放行只走原型链一次"）。
 - **集成**（`test/integration/`）：真实引擎的完整生命周期（含"断电重启后
   时间线补结算"）与一个**真实子进程服务器**上的完整游戏循环
   （收草 → 购买 → 装包 → 出发 → 明信片 → 访客 → 投喂 → 回礼），
   同时用本地 HTTP 接收端断言推送载荷与顺序。
+- **浏览器**（`test/browser/`）：需要 `playwright-core` 与本机 Chromium 缓存，
+  缺任一个就打印 SKIP 并退出 0，**不属于 `npm test`**。`first-load.cjs` 用
+  CDP `Network.emulateNetworkConditions` 限速，断言"闸门真的按住了
+  （按请求顺序）、传输没有超过 6 秒的停顿、二访零资源请求、缺文件不卡人"。
 - **手工冒烟**（`test/manual/`）：勘察与调试用的一次性脚本，不参与 CI。
 
 集成测试用 `FROG_FAITHFUL=0` 加缩短时长，所以整个循环能在秒级跑完；
@@ -333,7 +360,8 @@ npm run audit:network             # 重新生成网络审计报告
 |---|---|
 | [docs/source-map.md](docs/source-map.md) | 源包每个文件的作用、哪些被丢弃、引擎内部结构 |
 | [docs/protocol.md](docs/protocol.md) | wire 信封、握手时序、REST↔指令映射、推送事件表 |
-| [docs/decisions.md](docs/decisions.md) | 67 条自行决策与 7 条已知限制 |
+| [docs/first-load.md](docs/first-load.md) | 首屏 32.5 MB 是怎么算出来的、卡在哪、预载机制与实测结果 |
+| [docs/decisions.md](docs/decisions.md) | 74 条自行决策与 9 条已知限制 |
 | [docs/acceptance.md](docs/acceptance.md) | 验收清单的逐项自查（含未验证项与镜像体积实测） |
 
 ## 进设置页

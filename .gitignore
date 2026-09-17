@@ -37,6 +37,8 @@ data-anim/
 # 根目录这张只是 packaging/fnOS/assets/icon-source.png 的手工副本，
 # 权威副本在 packaging/ 下（make-icons.py 读的是那一份）。
 /512.png
+# `test/manual/push-receiver.js` 跑起来追加的接收记录，属于一次性勘察产物。
+test/manual/received.jsonl
 
 # ---- OS / editor -----------------------------------------------------------
 .DS_Store
