@@ -521,7 +521,7 @@ after 3rd tap  panel=block  pressed=true
 验证命令：
 
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t frog-nas:1.0.0 .
+docker buildx build --platform linux/amd64,linux/arm64 -t frog-nas:1.0.1 .
 docker image inspect frog-nas --format '{{.Os}}/{{.Architecture}}'
 ```
 

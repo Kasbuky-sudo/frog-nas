@@ -90,7 +90,7 @@ bash packaging/fnOS/scripts/build.sh
 单独跑：
 
 ```bash
-bash packaging/fnOS/scripts/verify-fpk.sh dist/frog-nas-1.0.0.fpk 18980
+bash packaging/fnOS/scripts/verify-fpk.sh dist/frog-nas-1.0.1.fpk 18980
 ```
 
 这一步的价值是：**能在本机干掉"包看着完整、装上去起不来"这一整类问题**
@@ -141,7 +141,7 @@ sudo cp -a /vol1/@appdata/frog-nas/. /vol1/1000/frog-nas-backup-$(date +%Y%m%d-%
 # 3. 升级必须【先卸再装】——见下面「install-fpk 对已装应用是空操作」
 sudo /usr/local/bin/appcenter-cli uninstall frog-nas
 sleep 8
-sudo /usr/local/bin/appcenter-cli install-fpk /vol1/1000/frog-nas-1.0.0.fpk -v 1
+sudo /usr/local/bin/appcenter-cli install-fpk /vol1/1000/frog-nas-1.0.1.fpk -v 1
 sleep 4
 sudo /usr/local/bin/appcenter-cli start frog-nas
 ```
@@ -176,7 +176,7 @@ CLI="C:\Users\User\.workbuddy\skills\trim-cli\bin\trim-cli-windows-x64.exe"
 "$CLI" --profile x86nas --allow-insecure-ws app uninstall frog-nas --yes
 sleep 6
 "$CLI" --profile x86nas --allow-insecure-ws app install-fpk \
-    "C:/path/to/dist/frog-nas-1.0.0-cli.fpk" --volume-id 1 --yes
+    "C:/path/to/dist/frog-nas-1.0.1-cli.fpk" --volume-id 1 --yes
 "$CLI" --profile x86nas --allow-insecure-ws app status frog-nas
 ```
 
@@ -201,7 +201,7 @@ PC 上要出一个能被 `trim-cli` 装的变体：
 
 ```bash
 DEP_APPS=none bash packaging/fnOS/scripts/build.sh
-# → dist/frog-nas-1.0.0-cli.fpk      （正式包不受影响）
+# → dist/frog-nas-1.0.1-cli.fpk      （正式包不受影响）
 ```
 
 设计上刻意的几点：

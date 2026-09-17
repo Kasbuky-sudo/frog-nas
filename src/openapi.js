@@ -12,7 +12,7 @@ const API_INFO = {
   openapi: '3.0.3',
   info: {
     title: '旅行青蛙 NAS 控制接口',
-    version: '1.0.0',
+    version: '1.0.1',
     description: [
       '服务端权威的《旅行青蛙·中国之旅》离线版控制接口，供 AI Agent / 外部程序操作。',
       '所有动作都通过游戏原版协议转发给服务端引擎，因此规则（槽位类型、购买上限、',

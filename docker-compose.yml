@@ -17,7 +17,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: frog-nas:1.0.0
+    image: frog-nas:1.0.1
     container_name: frog-nas
     restart: unless-stopped
     # 镜像元数据（作者等）写在 Dockerfile 的 LABEL 里，docker inspect 可查。
