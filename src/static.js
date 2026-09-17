@@ -6,13 +6,15 @@
  *
  * Three rewrites happen at serve time:
  *
- *   1. index.html  -- a one-line shim appended to <head> that puts the page in
- *      Route A. The page's own probe installs an in-page loopback engine unless
- *      the URL carries `?transport=ws`, so without this, opening
+ *   1. index.html  -- the shims appended to <head>. The first puts the page in
+ *      Route A: the page's own probe installs an in-page loopback engine unless
+ *      the URL carries `?transport=ws`, so without it, opening
  *      http://nas:8980 would run a SECOND engine in the browser instead of
- *      talking to the server. The shim rewrites the URL before any other script
+ *      talking to the server. That shim rewrites the URL before any other script
  *      runs, which is also why it is injected rather than done in a redirect:
  *      a redirect would change the URL the player sees and break ?log=1 etc.
+ *      The others are, in order: a default XHR timeout (see XHR_TIMEOUT_SHIM),
+ *      the orientation fix, the settings entry label, and the menu/editor fixes.
  *
  *   2. gameConfig.json -- `serverList.offline.gameServer` is replaced with this
  *      deployment's own /ws endpoint. The scheme follows X-Forwarded-Proto so a
@@ -24,7 +26,9 @@
  *
  * Nothing else is touched: launcher.js, the manifest, __probe.js and the engine
  * bundle are served verbatim, so the probe's scene fixes and the rights notice
- * behave exactly as in the source package.
+ * behave exactly as in the source package. Shims are the ONLY way vendor content
+ * is affected -- editing a file under vendor/ by hand looks like it works and
+ * then disappears on the next scripts/fetch-source.js run.
  */
 const fs = require('fs');
 const path = require('path');
@@ -112,6 +116,50 @@ const TRANSPORT_SHIM = `<script>
       history.replaceState(null, '', u.pathname + u.search + u.hash);
     }
   } catch (e) { /* very old browser: the game itself will not run anyway */ }
+})();
+</script>`;
+
+/**
+ * XHR default-timeout shim.
+ *
+ * WHY THIS IS NEEDED (from the engine source, not guesswork):
+ *
+ *   Egret's WebHttpRequest constructs its XHR with `this.timeout = 0` and copies
+ *   that onto the request in send(). In XHR, timeout 0 means "never time out".
+ *   A connection that goes half-open -- still established at the TCP level, but
+ *   no bytes moving in either direction -- therefore produces no error event at
+ *   all: RES.ResourceLoader simply waits, forever. That matches the reported
+ *   symptom exactly: the progress bar stops part-way and the NAS appears to stop
+ *   sending, leaving nothing in any server log, because nothing actually failed.
+ *
+ *   The loader does have retries (maxRetryTimes = 3), but it only retries on an
+ *   error event, and with no timeout there is never one -- it has no way to
+ *   recover. Filling in a default turns a stall into timeout -> error -> retry,
+ *   which is what makes the existing retry chain reachable.
+ *
+ * Only requests that asked for no timeout are touched (0 is falsy); anything that
+ * set its own value, including a shorter one, keeps it. Setting .timeout on a
+ * synchronous request throws, hence the try/catch -- a request merely outside
+ * this shim's reach must still go out untouched.
+ *
+ * 120s rather than something snappier, on purpose: the largest single request at
+ * startup is a 4.14MB atlas, which is ~83s even on a poor 50KB/s link. A false
+ * timeout costs a needless re-download, so the ceiling is generous by design.
+ */
+const XHR_TIMEOUT_SHIM = `<script>
+(function () {
+  var MS = 120 * 1000;
+  if (!window.XMLHttpRequest || window.__frogXhrTimeout) return;
+  var proto = window.XMLHttpRequest.prototype;
+  var send = proto.send;
+  proto.send = function () {
+    try {
+      if (!this.timeout) this.timeout = MS;
+    } catch (e) { /* leave the request exactly as it was */ }
+    return send.apply(this, arguments);
+  };
+  window.__frogXhrTimeout = MS;
+  console.log('frog: xhr default timeout = ' + MS + 'ms');
 })();
 </script>`;
 
@@ -701,8 +749,9 @@ const MENU_SHIM = `<script>
  */function injectTransportShim(html) {
   const m = /<head[^>]*>/i.exec(html);
   // Transport first: it must run before __probe.js decides on the in-page engine.
-  const shims = '\n' + TRANSPORT_SHIM + '\n' + ORIENTATION_SHIM + '\n'
-    + SETTINGS_ENTRY_SHIM + '\n' + MENU_SHIM;
+  // The XHR timeout goes next so it is armed before any game script can fetch.
+  const shims = '\n' + TRANSPORT_SHIM + '\n' + XHR_TIMEOUT_SHIM + '\n'
+    + ORIENTATION_SHIM + '\n' + SETTINGS_ENTRY_SHIM + '\n' + MENU_SHIM;
   if (!m) return shims + html;
   const at = m.index + m[0].length;
   return html.slice(0, at) + shims + html.slice(at);
@@ -748,6 +797,66 @@ function injectPortCredit(html) {
   }
 
   return html;      // notice not found: leave the page exactly as it was
+}
+
+/**
+ * 开屏声明里再注入一块内容，同样是响应期注入 —— vendor/game/index.html 在磁盘上
+ * 逐字节不动（见文件头）。
+ *
+ * 版面（按验收截图）：
+ *
+ *     三、致谢 …
+ *                                   声明人：Balticx        <- 原文
+ *                               NAS / Docker 移植：Kasbuky   <- 移植署名（也是注入的）
+ *                                  健康游戏忠告            <- 居中，与 一/二/三 同级
+ *                                抵制不良游戏，拒绝盗版游戏。
+ *                                  …（四句，居中）
+ *                                  是不是对味了            <- 居中，很小很淡
+ *                                [ 我已阅读，进入游戏 ]     <- 原文
+ *
+ * 挂点选在**最后一个署名段之后**：单独跑时它是「声明人：Balticx」，走完整链路时
+ * 它是移植署名那一行 —— 两种情况下这块都落在所有署名之后、关闭按钮之前，也就是
+ * 声明的最下方。
+ *
+ * 挂点必须是"接在已有元素后面"而不是"插到某个元素前面"：原文用的是 **CRLF**，
+ * 注入块用的是 LF；从元素**前面**插入会把原文那对 `\r\n` 拆开，剥离时留下一个
+ * 孤立的 `\r`，逐字节还原就失败了（踩过一次）。接在元素后面时注入块自带的前导
+ * 空白由剥离正则的 `\n\s*` 一并吃掉，原文的 `\r\n\r\n` 原封不动。
+ *
+ * 只插入、不删改任何原文；锚点找不到就原样返回，将来换源包也不会把页面弄坏。
+ * 样式一律内联，免得为一个字号去动 vendor 的 <style>。
+ */
+const HEALTH_ADVISORY_TITLE = '健康游戏忠告';
+const HEALTH_ADVISORY_LINES = [
+    '抵制不良游戏，拒绝盗版游戏。',
+    '注意自我保护，谨防受骗上当。',
+    '适度游戏益脑，沉迷游戏伤身。',
+    '合理安排时间，享受健康生活。',
+];
+const NOTICE_TAIL_ID = '__notice_tail';
+const NOTICE_TAIL_TEXT = '是不是对味了';
+
+// 声明是黑底白字（#__notice 是 background:#000 + color:#fff）。忠告正文沿用 <p>
+// 的字号只加居中；末尾那句用半透明白小字，深浅两端都读得清，也自带"这是句闲话"
+// 的语气。
+const NOTICE_EXTRA_HTML = '\n\n            <h2 style="text-align:center">'
+    + HEALTH_ADVISORY_TITLE + '</h2>\n'
+    + '            <p style="text-align:center">' + HEALTH_ADVISORY_LINES.join('<br>') + '</p>\n\n'
+    + '            <p id="' + NOTICE_TAIL_ID + '"'
+    + ' style="font-size:11px;opacity:.4;text-align:center;margin:16px 0 0">'
+    + NOTICE_TAIL_TEXT + '</p>';
+
+function injectNoticeExtra(html) {
+    if (html.includes(NOTICE_TAIL_ID)) return html;      // 已经注入过，幂等
+
+    const re = /<p class="__sign">[^<]*<\/p>/g;
+    let last = null;
+    let m;
+    while ((m = re.exec(html)) !== null) last = m;
+    if (!last) return html;                              // 没有声明：原样返回
+
+    const at = last.index + last[0].length;
+    return html.slice(0, at) + NOTICE_EXTRA_HTML + html.slice(at);
 }
 
 /**
@@ -881,7 +990,7 @@ class StaticServer {
     res.setHeader('Cache-Control', 'no-cache');
     // The port credit is added to the rights notice too, so the overlay names all
     // three parties: Hit-Point (copyright), Balticx (offline build), Kasbuky (port).
-    res.send(injectPortCredit(injectTransportShim(html)));
+    res.send(injectNoticeExtra(injectPortCredit(injectTransportShim(html))));
   }
 
   /** Serve gameConfig.json with this deployment's WS endpoint. */
@@ -929,5 +1038,8 @@ module.exports = {
   StaticServer, MIME, contentType, cspHeader, injectTransportShim,
   rewriteGameConfig, requestHost, requestProto,
   TRANSPORT_SHIM, ORIENTATION_SHIM, SETTINGS_ENTRY_SHIM, MENU_SHIM,
+  XHR_TIMEOUT_SHIM,
   injectPortCredit, PORT_CREDIT_NAME, PORT_CREDIT_TEXT,
+  injectNoticeExtra, HEALTH_ADVISORY_TITLE, HEALTH_ADVISORY_LINES,
+  NOTICE_TAIL_ID, NOTICE_TAIL_TEXT,
 };

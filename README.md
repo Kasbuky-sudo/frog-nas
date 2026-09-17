@@ -46,8 +46,8 @@ AI/外部程序 ─Bearer─▶ /api/* ── Bot 客户端（同一套 wire 协
 装法有两种，任选：
 
 ```text
-① 直接下包：Releases 页 → frog-nas-1.0.1.fpk → 应用中心「手动安装」
-   https://github.com/Kasbuky-sudo/frog-nas/releases/tag/v1.0.1
+① 直接下包：Releases 页 → frog-nas-1.0.2.fpk → 应用中心「手动安装」
+   https://github.com/Kasbuky-sudo/frog-nas/releases/tag/v1.0.2
 
 ② 加应用源（以后有新版本会在应用中心里直接提示更新）
    https://github.com/Kasbuky-sudo/FnDepot
@@ -369,8 +369,8 @@ docker compose up -d --build     # 自动匹配本机架构
 想显式指定或做多架构构建：
 
 ```bash
-docker build --platform linux/arm64 -t frog-nas:1.0.1 .
-docker buildx build --platform linux/amd64,linux/arm64 -t frog-nas:1.0.1 .
+docker build --platform linux/arm64 -t frog-nas:1.0.2 .
+docker buildx build --platform linux/amd64,linux/arm64 -t frog-nas:1.0.2 .
 ```
 
 验证镜像架构：`docker inspect frog-nas --format '{{.Architecture}}'`，

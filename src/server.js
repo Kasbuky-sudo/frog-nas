@@ -50,6 +50,28 @@ function main() {
     : path.join(ROOT, 'data');
   ensureDirs(dataDir);
 
+  // ---- 轻量访问日志
+  //
+  // 这台服务此前的故障从不留在自己的日志里：WebView 在加载中途停住时，服务端
+  // 看到的只是一次"没写完的响应"，而这一版之前连这都没记，于是每次"卡住"都
+  // 不可复现、只能靠猜。这里只记**可疑**的请求：客户端中途断开、状态码 >= 400、
+  // 或耗时超过阈值。正常请求一律不记，所以它既不会把日志冲成噪声，也不会成为
+  // 常态 IO 负担。文件超过 ACCESS_MAX_BYTES 时清零重来，避免无限增长。
+  const accessLogFile = path.join(dataDir, 'logs', 'access.log');
+  const ACCESS_SLOW_MS = Number(process.env.FROG_ACCESS_SLOW_MS || 3000);
+  const ACCESS_MAX_BYTES = 4 * 1024 * 1024;
+  let accessLogBytes = fileSize(accessLogFile);
+  const noteAccess = (line) => {
+    try {
+      if (accessLogBytes > ACCESS_MAX_BYTES) {
+        fs.truncateSync(accessLogFile, 0);
+        accessLogBytes = 0;
+      }
+      fs.appendFile(accessLogFile, line + '\n', () => { });
+      accessLogBytes += Buffer.byteLength(line) + 1;
+    } catch (e) { /* 记日志绝不能影响请求本身 */ }
+  };
+
   const settings = new Settings(dataDir);
   const cfg = settings.get();
 
@@ -109,6 +131,35 @@ function main() {
   }));
   app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
+  // ---- 可疑请求记录（见上面 noteAccess 的说明）
+  //
+  // 必须挂在所有路由之前，否则最需要被记录的那几条（资源 404、连接被掐断）
+  // 根本走不到这里。req.path 用 `|| '/'` 兜底，避免 express 在某些挂载点上
+  // 给出空串时把判断写歪。
+  app.use((req, res, next) => {
+    const path = req.path || '/';
+    if (path === '/__log') { next(); return; }   // 探针自己的上报不记，否则会自己刷自己
+    const t0 = Date.now();
+    res.on('close', () => {
+      const ms = Date.now() - t0;
+      const code = res.statusCode;
+      const cut = !res.writableEnded;            // 响应没写完就关了 => 客户端中途断开
+      if (!cut && code < 400 && ms < ACCESS_SLOW_MS) return;
+      const tag = cut ? 'CUT' : (code >= 400 ? 'ERR' : 'SLOW');
+      noteAccess([
+        new Date().toISOString(),
+        tag,
+        req.method,
+        String(code),
+        ms + 'ms',
+        req.headers.range || '-',
+        String(req.headers['user-agent'] || '-').slice(0, 70),
+        req.originalUrl,
+      ].join(' '));
+    });
+    next();
+  });
+
   const staticServer = new StaticServer({
     gameDir: path.join(ROOT, 'vendor', 'game'),
     resourceDir: path.join(ROOT, 'vendor', 'resource'),
@@ -126,6 +177,7 @@ function main() {
     host, gd, bot, settings, push: dispatcher, bridge,
     openapi: buildOpenApi(),
     readClientLog: (limit) => readTail(path.join(dataDir, 'logs', 'client.log'), limit),
+    readAccessLog: (limit) => readTail(accessLogFile, limit),
   }));
 
   // ---- /__log: the sink __probe.js posts to when the page is opened with ?log=1
@@ -226,6 +278,15 @@ function main() {
   });
 
   const server = http.createServer(app);
+  // Node 默认 keepAliveTimeout 只有 5s。游戏的资源加载器固定 4 路并发，而组与组
+  // 之间（以及加载页等待玩家点击时）经常有超过 5s 的空档——这时浏览器手里那条
+  // 复用的连接已经被服务端悄悄关掉了，下一个请求发上去就变成 RST / 假死。
+  // 症状是"传着传着突然不动了、刷新一下又好了"，和客户端是安卓还是鸿蒙无关，
+  // 所以 1.0.2 之前那种"只有鸿蒙会挂"的判断并不成立。
+  // headersTimeout 必须严格大于 keepAliveTimeout，否则 Node 会在连接被复用、
+  // 但请求头还没读完时先把连接掐掉（这会制造出比原问题更难查的假象）。
+  server.keepAliveTimeout = Number(process.env.FROG_KEEPALIVE_MS || 65000);
+  server.headersTimeout = server.keepAliveTimeout + 5000;
   bridge.attach(server, '/ws');
 
   server.listen(PORT, HOST, () => {
@@ -287,6 +348,12 @@ function envWithOverrides(fromConfig) {
   return out;
 }
 
+/** Size of a file in bytes, or 0 when it does not exist yet. Used to prime the
+ *  access log's size counter without an extra stat on every request. */
+function fileSize(file) {
+  try { return fs.statSync(file).size; } catch (e) { return 0; }
+}
+
 /** Last `limit` lines of a log file (missing file -> empty). */
 function readTail(file, limit) {
   try {
@@ -299,4 +366,4 @@ function readTail(file, limit) {
 
 if (require.main === module) main();
 
-module.exports = { main, envWithOverrides, readTail, PORT, TICK_MS };
+module.exports = { main, envWithOverrides, readTail, fileSize, PORT, TICK_MS };

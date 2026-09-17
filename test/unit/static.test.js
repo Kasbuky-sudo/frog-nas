@@ -10,8 +10,10 @@ const nodePath = require('path');
 
 const { rewriteGameConfig, injectTransportShim, cspHeader, requestHost, requestProto,
   StaticServer,
-  TRANSPORT_SHIM, ORIENTATION_SHIM, SETTINGS_ENTRY_SHIM, MENU_SHIM,
-  injectPortCredit, PORT_CREDIT_NAME } = require('../../src/static');
+  TRANSPORT_SHIM, XHR_TIMEOUT_SHIM, ORIENTATION_SHIM, SETTINGS_ENTRY_SHIM, MENU_SHIM,
+  injectPortCredit, PORT_CREDIT_NAME,
+  injectNoticeExtra, HEALTH_ADVISORY_TITLE, HEALTH_ADVISORY_LINES,
+  NOTICE_TAIL_ID, NOTICE_TAIL_TEXT } = require('../../src/static');
 
 const ORIGINAL = JSON.stringify({
   description: 'OFFLINE single-player build',
@@ -115,6 +117,36 @@ test('shim: the rights notice is left untouched', () => {
   assert.ok(out.includes('Balticx'));
 });
 
+// ------------------------------------------------------------- XHR 超时兜底
+// 引擎的 WebHttpRequest 把 xhr.timeout 设成 0（= 永不超时），于是连接"假死"——
+// 既不报错也不断开——的时候资源加载器会一直等下去，界面就是进度条卡在那里、
+// 「NAS 不再传数据」。引擎自带 3 次重试，但只在 error 事件上触发，没有超时
+// 等于没有自愈能力。这个 shim 只补默认值，并且必须排在所有游戏脚本之前。
+
+test('xhr timeout: shim 排在游戏脚本之前（launcher.js 自己马上要发 XHR）', () => {
+  const html = '<html><head><script src="launcher.js"></script></head><body></body></html>';
+  const out = injectTransportShim(html);
+  assert.ok(out.indexOf('__frogXhrTimeout') > 0, 'shim present');
+  assert.ok(out.indexOf('__frogXhrTimeout') < out.indexOf('<script src="launcher.js"'),
+    '必须赶在 launcher.js 之前装好');
+});
+
+test('xhr timeout: 只补 0，不覆盖显式值；同步请求报错不外泄', () => {
+  const body = XHR_TIMEOUT_SHIM.replace(/^\s*<script>/, '').replace(/<\/script>\s*$/, '');
+  assert.match(body, /if \(!this\.timeout\) this\.timeout = MS;/);
+  assert.match(body, /catch \(e\)/);
+  // 包住 send 而不是替换整个 XHR 实现，原有行为必须原样透传。
+  assert.match(body, /return send\.apply\(this, arguments\);/);
+});
+
+test('xhr timeout: 默认值容得下最慢的单个资源', () => {
+  // 启动期最大的单个资源是 4.14MB 的图集，按 50KB/s 的极差链路约 83s。
+  // 默认值必须留足余量，免得把"链路真的慢"误判成失败。
+  const m = /var MS = (\d+) \* 1000;/.exec(XHR_TIMEOUT_SHIM);
+  assert.ok(m, 'MS 用 N * 1000 的写法');
+  assert.ok(Number(m[1]) >= 90, '默认超时至少 90s，当前 ' + m[1] + 's');
+});
+
 test('csp: pins every resource class to self, with no third-party host', () => {
   const csp = cspHeader();
   assert.match(csp, /default-src 'self'/);
@@ -212,7 +244,8 @@ test('orientation: resizing is debounced (no layout storm)', () => {
 // the server module, caught below) or silently interpolate at build time.
 test('shims: each one is valid standalone JavaScript', () => {
   const vm = require('node:vm');
-  const shims = { TRANSPORT_SHIM, ORIENTATION_SHIM, SETTINGS_ENTRY_SHIM, MENU_SHIM };
+  const shims = { TRANSPORT_SHIM, XHR_TIMEOUT_SHIM, ORIENTATION_SHIM,
+    SETTINGS_ENTRY_SHIM, MENU_SHIM };
   for (const [name, src] of Object.entries(shims)) {
     assert.ok(src.startsWith('<script>'), name + ' is wrapped in a script tag');
     assert.ok(src.trimEnd().endsWith('</script>'), name + ' closes its script tag');
@@ -250,29 +283,30 @@ test('shims: no stray backtick can close a template literal early', () => {
     }
     assert.ok(closed, m[1] + ' is never closed with a backtick');
   }
-  assert.ok(checked >= 4, 'found the shim definitions (got ' + checked + ')');
+  assert.ok(checked >= 5, 'found the shim definitions (got ' + checked + ')');
 });
 
-test('shims: all four are injected, in order, before every game script', () => {
+test('shims: all five are injected, in order, before every game script', () => {
   const html = '<html><head><meta charset="utf-8">'
     + '<script src="__offline-engine.js"></script><script src="__probe.js"></script>'
     + '</head><body></body></html>';
   const out = injectTransportShim(html);
   const marks = [
     "searchParams.set('transport', 'ws')",
+    '__frogXhrTimeout',
     'wantedMode',
     'TicketDetailController',
     '__menu_editor',
   ];
   const at = marks.map((m) => out.indexOf(m));
-  assert.ok(at.every((i) => i > 0), 'all four shims present: ' + JSON.stringify(at));
+  assert.ok(at.every((i) => i > 0), 'all five shims present: ' + JSON.stringify(at));
   // Transport first (the probe reads ?transport=ws when it evaluates), then the
   // rest in a fixed order, all before the engine bundle.
   for (let i = 1; i < at.length; i++) {
     assert.ok(at[i - 1] < at[i], marks[i] + ' must come after ' + marks[i - 1]);
   }
   const engineAt = out.indexOf('<script src="__offline-engine.js"');
-  assert.ok(at[3] < engineAt, 'the last shim still precedes the engine bundle');
+  assert.ok(at[4] < engineAt, 'the last shim still precedes the engine bundle');
 });
 
 test('settings entry: no floating button is injected any more', () => {
@@ -539,4 +573,67 @@ test('port credit: applied to the REAL index.html, with the notice intact', { sk
   const full = injectPortCredit(injectTransportShim(real));
   assert.ok(full.includes(PORT_CREDIT_NAME));
   assert.ok(full.indexOf(PORT_CREDIT_NAME) < full.indexOf('__notice_ok'));
+});
+
+// ------------------------------------------------- 开屏声明的另两块（响应期注入）
+// 与上面的移植署名同一个约束：只在声明里「插入」，vendor/game/index.html 在磁盘上
+// 逐字节不动。两块各有自己的锚点，锚点找不到就原样返回。
+
+const WITH_NOTICE = '<div id="__notice">'
+  + '<h2>三、致谢</h2><p>感谢原开发团队创作本作品。</p>'
+  + '<p class="__sign">声明人：Balticx</p>'
+  + '<button id="__notice_ok" type="button">我已阅读，进入游戏</button></div>';
+
+test('notice extra: 忠告接在所有署名之后、居中', () => {
+  const out = injectNoticeExtra(WITH_NOTICE);
+  assert.ok(out.includes(HEALTH_ADVISORY_TITLE));
+  for (const line of HEALTH_ADVISORY_LINES) assert.ok(out.includes(line), '缺一句: ' + line);
+  // 致谢正文 → 署名 → 忠告：忠告要压在最后一行署名之后。
+  assert.ok(out.indexOf('三、致谢') < out.indexOf('声明人：Balticx'), '署名在致谢正文之后');
+  assert.ok(out.indexOf('声明人：Balticx') < out.indexOf(HEALTH_ADVISORY_TITLE),
+    '落在所有署名之后');
+  // 逐条居中：标题与正文都带 text-align:center。
+  assert.match(out, new RegExp('<h2[^>]*text-align:center[^>]*>' + HEALTH_ADVISORY_TITLE));
+  assert.match(out, /<p[^>]*text-align:center[^>]*>抵制不良游戏/);
+});
+
+test('notice extra: 末尾小字紧贴声明尾部（进入按钮之前）', () => {
+  const out = injectNoticeExtra(WITH_NOTICE);
+  assert.ok(out.includes(NOTICE_TAIL_TEXT));
+  assert.ok(out.indexOf(HEALTH_ADVISORY_TITLE) < out.indexOf(NOTICE_TAIL_TEXT),
+    '小字在忠告之后');
+  assert.ok(out.indexOf(NOTICE_TAIL_TEXT) < out.indexOf('我已阅读，进入游戏'),
+    '小字收在声明尾部，进入按钮仍是最后一项');
+  // 「小字」要真的小：内联 style，11px，半透明。
+  assert.match(out, new RegExp('id="' + NOTICE_TAIL_ID + '"[^>]*font-size:11px'));
+  assert.match(out, new RegExp('id="' + NOTICE_TAIL_ID + '"[^>]*opacity:'));
+});
+
+test('notice extra: 幂等', () => {
+  const once = injectNoticeExtra(WITH_NOTICE);
+  assert.equal(injectNoticeExtra(once), once, '第二遍不能再插一遍');
+});
+
+test('notice extra: 没有声明时原样返回', () => {
+  const html = '<html><body><p>no notice here</p></body></html>';
+  assert.equal(injectNoticeExtra(html), html);
+});
+
+test('notice extra: 真实 index.html 上只多出这两块，其余逐字节不变', { skip: !hasVendor }, () => {
+  const real = fs.readFileSync(REAL_INDEX, 'utf8');
+  const out = injectNoticeExtra(real);
+  assert.ok(out.includes(HEALTH_ADVISORY_TITLE));
+  assert.ok(out.includes(NOTICE_TAIL_TEXT));
+
+  for (const fragment of ['权利归属与告知声明', 'Hit-Point Co., Ltd.', '声明人：Balticx',
+    '我已阅读，进入游戏', '__noticeDismissed = false']) {
+    assert.ok(out.includes(fragment), 'preserved: ' + fragment);
+  }
+
+  // 把这两块剥掉，必须与源文件逐字节相等 —— 「只加不改」的最强形式。
+  // 两块都自带前导空白（会被 \\n\\s* 吃掉），原文那对 CRLF 因此原封不动。
+  const stripped = out
+    .replace(new RegExp('\\n\\s*<h2[^>]*>' + HEALTH_ADVISORY_TITLE + '<\\/h2>[\\s\\S]*?<\\/p>'), '')
+    .replace(new RegExp('\\n\\s*<p id="' + NOTICE_TAIL_ID + '"[^>]*>[\\s\\S]*?<\\/p>'), '');
+  assert.equal(stripped, real, '服务端输出与源文件只差这两块');
 });

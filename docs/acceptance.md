@@ -342,7 +342,7 @@ shim 被注入、注入顺序（在游戏脚本之前）、用的是同一条宽
 | 点它返回 | 回到 `http://127.0.0.1:8980/?transport=ws`，开屏声明正常，游戏可继续 |
 | 全过程中页面报错 | **0 条** |
 
-**自动化覆盖**：`test/unit/static.test.js` 33 个用例（含 shim 可解析性、注入顺序、
+**自动化覆盖**：`test/unit/static.test.js` 53 个用例（含 shim 可解析性、注入顺序、
 只在空列表时接管、只包一层、保留原方法、以及"没有注入任何浮动按钮"）；
 `test/unit/admin.test.js` 新增 5 个用例专门守返回入口（两个链接都存在、都指向 `/`、
 顶部那个在设置卡片之前、署名齐全）。
@@ -388,13 +388,70 @@ shim 被注入、注入顺序（在游戏脚本之前）、用的是同一条宽
 
 **逐字节验证**：有一条测试把服务端输出里的这一行删掉后与源文件 `index.html`
 **逐字节比对**，必须完全相等。也就是说这次改动的全部差异就是那一行
-（外加四个 script shim，另有测试覆盖）。这条断言是"没有偷偷改动版权文本"的机器保证。
+（外加五个 script shim，另有测试覆盖）。这条断言是"没有偷偷改动版权文本"的机器保证。
 
 镜像元数据可以这样查：
 
 ```bash
 docker inspect frog-nas --format '{{json .Config.Labels}}'
 ```
+
+---
+
+## §12 加载中途停住（v1.0.2）
+
+**症状**：客户端加载到一半停住，进度条不再推进，NAS 侧不再有数据发出；刷新一次往往就好了。
+鸿蒙版飞牛 App 上较稳定地复现，**安卓版在 WiFi 环境下也遇到过**——此前记录的
+「安卓版没有这个问题」不成立。
+
+**先排除掉的**（免得往错的方向改）：
+
+| 怀疑 | 实测 | 结论 |
+|---|---|---|
+| NAS 带宽不够 | 局域网拉 4.14MB 的图集 88ms 返回（约 49MB/s）；冷启动全部资源 28.89 MiB / 95 个请求，局域网一秒内发得完 | 不成立 |
+| 服务端被拖死 | 进程从启动到现在没有重启过（`app.pid` 的 mtime 未变） | 不成立 |
+| 引擎心跳堵住事件循环 | 存档层确实是同步 fs，但存档只有 16KB，且 9 秒内 mtime 没变——不是每次心跳都写盘 | 不成立 |
+
+**三处改动**（单改任何一处都堵不住）：
+
+| # | 位置 | 改动 |
+|---|---|---|
+| 1 | `src/server.js` | `server.keepAliveTimeout` 由 Node 默认的 **5s → 65s**（`FROG_KEEPALIVE_MS` 可覆盖），`headersTimeout = keepAliveTimeout + 5s` |
+| 2 | `src/static.js` | 新增 `XHR_TIMEOUT_SHIM`，给所有没显式设超时的 XHR 补 **120s** 默认值 |
+| 3 | `src/server.js` + `src/api/index.js` | 可疑请求日志，`GET /api/logs/access?limit=N` 读取 |
+
+**为什么是这三处**：
+
+- 加载器固定 4 路并发，而组与组之间（以及加载页等玩家点击的空档）经常超过 5s。连接被服务端
+  悄悄关掉之后，浏览器下一个请求发上去就是 RST 或假死——这正好解释了「刷新一下又好了」，
+  也解释了它为什么和客户端是安卓还是鸿蒙**无关**。
+- 引擎的 `WebHttpRequest` 在构造时把 `this.timeout` 设成 `0`（在 XHR 里等于**永不超时**），
+  send 时才抄到请求上。于是连接假死时**既没有 error 事件、也没有断开**，资源加载器就一直
+  等下去。它本来有 3 次重试，但只在 error 事件上触发——没有超时等于没有自愈能力。
+  补上默认值之后，假死会走回「超时 → error → 重试」这条既有链路。取 120s 是为了不误伤慢链路：
+  冷启动最大的单个资源是 4.14MB 的图集，按 50KB/s 的极差链路算约 83s。
+- 这台服务此前的故障**从不留在自己的日志里**：WebView 中途停住时，服务端看到的只是一次
+  「没写完的响应」，而 1.0.2 之前连这都没记，于是每次「卡住」都不可复现、只能靠猜。现在客户端
+  中途掐断连接时，服务端能在 `res.on('close')` 里看到 `res.writableEnded === false`，直接落一条 `CUT`。
+
+**日志语义**：只记三类，正常请求一律不入账，所以**空列表就是健康**。
+
+| tag | 含义 |
+|---|---|
+| `CUT` | 响应没写完客户端就断了——最值得看的一条 |
+| `ERR` | 状态码 ≥ 400 |
+| `SLOW` | 耗时 ≥ `FROG_ACCESS_SLOW_MS`（默认 3000ms） |
+
+落盘 `logs/access.log`，超过 4MB 就清零重来（不轮转，只保留最近一段）。
+
+**`launcher.js` 曾经被直接改过，已回退。** 这条修复最初是往 `vendor/game/launcher.js` 头部
+加 40 行实现的，但 `vendor/` 既在 `.gitignore` 里、又由 `scripts/fetch-source.js` **逐字节原样
+复制**，所以它会静默消失，也违反了本项目的「原始文件零修改」（见 `src/static.js` 文件头）。
+现在改为响应期注入的 `XHR_TIMEOUT_SHIM`，`launcher.js` 已还原到与源包 sha256 一致
+（`9308186f1e5c724e166121a1f2ad08f12f42583704f966e7c9bb4b0a3c33bd1a`）。
+
+**自动化覆盖**：`test/unit/static.test.js` 新增 3 条（shim 排在游戏脚本之前、只补 `0` 不覆盖
+显式值、默认值 ≥ 90s）；「每条已实现路由都有文档」那条一致性测试同时覆盖了 `/api/logs/access`。
 
 ---
 
@@ -406,6 +463,7 @@ docker inspect frog-nas --format '{{json .Config.Labels}}'
 | **MeoW 真机投递** | 需要绑定 MeoW 的鸿蒙设备 | 设置页填昵称 → 点「发送测试推送」 |
 | **浏览器 E2E 进 CI** | 项目未引入 Playwright（依赖预算优先） | 浏览器手动验证步骤见 §1/§4/§7，已实测通过一次 |
 | **真实 NAS 上的反代** | 本环境无反代 | `X-Forwarded-Proto: https` → `wss://` 的改写有单测覆盖（`static.test.js`），可直接依赖 |
+| **加载中途停住是否真的修好** | 原故障与客户端相关且间歇，本机无法复现 | 再遇到时把 `GET /api/logs/access?limit=200` 的输出贴出来：`CUT` = 客户端中途掐断、`ERR` = 服务端出错、空列表 = 这次不是服务端的事 |
 
 ### 镜像体积（实测构成）
 
@@ -521,7 +579,7 @@ after 3rd tap  panel=block  pressed=true
 验证命令：
 
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t frog-nas:1.0.1 .
+docker buildx build --platform linux/amd64,linux/arm64 -t frog-nas:1.0.2 .
 docker image inspect frog-nas --format '{{.Os}}/{{.Architecture}}'
 ```
 

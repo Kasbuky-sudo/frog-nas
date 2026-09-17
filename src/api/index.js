@@ -723,6 +723,14 @@ function createApiRouter(ctx) {
     res.json({ lines: ctx.readClientLog(limit) });
   }));
 
+  // Only "suspicious" requests are recorded (client cut off mid-response, 4xx/5xx,
+  // or slower than FROG_ACCESS_SLOW_MS), so an empty list here is the healthy case.
+  router.get('/logs/access', wrap((req, res) => {
+    const limit = Math.min(Number(req.query.limit) || 200, 2000);
+    const read = ctx.readAccessLog || (() => []);
+    res.json({ lines: read(limit) });
+  }));
+
   // ------------------------------------------------------------ debug (opt-in)
   //
   // The engine ships a GM console (client_gm) that doubles as a save editor: it
