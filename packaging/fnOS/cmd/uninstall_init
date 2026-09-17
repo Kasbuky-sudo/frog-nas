@@ -1,0 +1,38 @@
+#!/bin/bash
+# 卸载前：先停服务，再留一份存档快照。
+#
+# 停服务不能省：应用中心卸载时会自己 stop，但手工 `app uninstall` 的路径上
+# 引擎可能还在写存档，拷出来的文件会是不一致状态。
+
+APPNAME="frog-nas"
+
+_app_link="/var/apps/${APPNAME}"
+if [ -z "${TRIM_PKGVAR:-}" ] || [ ! -d "${TRIM_PKGVAR:-}" ]; then
+    if [ -L "${_app_link}/var" ]; then
+        TRIM_PKGVAR="$(readlink -f "${_app_link}/var" 2>/dev/null)"
+    fi
+fi
+
+# 注意：这里写死 "${CMD_DIR}/main"，绝不能改成
+#   SCRIPT="$(readlink -f "$0")"; bash "${SCRIPT}" stop
+# —— 钩子里的 $0 指向钩子自身，那样会递归执行整个卸载流程（真机上炸过：
+#    一次卸载产生 5888 个进程，load 4+，设备被拖重启）。
+CMD_DIR="/var/apps/${APPNAME}/cmd"
+if [ -x "${CMD_DIR}/main" ]; then
+    bash "${CMD_DIR}/main" stop > /dev/null 2>&1
+fi
+unset _app_link
+
+[ -z "${TRIM_PKGVAR:-}" ] && exit 0
+
+# 存档快照：卸载是否会连带删掉 @appdata 由 fnOS 决定，这里只保证
+# "卸载那一刻的数据"在包内留得下痕迹，方便事后恢复。
+if [ -d "${TRIM_PKGVAR}/data" ]; then
+    DEST="${TRIM_PKGVAR}/backups/pre-uninstall-$(date '+%Y%m%d-%H%M%S')"
+    mkdir -p "${DEST}" 2>/dev/null
+    [ -f "${TRIM_PKGVAR}/data/config.json" ] && cp -p "${TRIM_PKGVAR}/data/config.json" "${DEST}/config.json" 2>/dev/null
+    [ -d "${TRIM_PKGVAR}/data/save" ] && cp -Rp "${TRIM_PKGVAR}/data/save" "${DEST}/save" 2>/dev/null
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - uninstall_init: 存档快照 -> ${DEST}" >> "${TRIM_PKGVAR}/info.log" 2>/dev/null
+fi
+
+exit 0

@@ -1,0 +1,48 @@
+#!/bin/bash
+# 升级前：把存档与配置快照到 ${TRIM_PKGVAR}/backups/pre-upgrade-<时间戳>/。
+#
+# 只快照用户数据（config.json + save/），不动 app 目录——app 是这次要被替换的东西。
+# 保留最近 3 份，避免反复升级把数据卷撑满。
+#
+# 注意：用 `app install-fpk` 手工覆盖安装时 fnOS 不会走 upgrade_* 钩子
+# （那是应用中心"更新"才走的流程），所以这条快照不能当成唯一保险。
+APPNAME="frog-nas"
+
+_app_link="/var/apps/${APPNAME}"
+if [ -z "${TRIM_PKGVAR:-}" ] || [ ! -d "${TRIM_PKGVAR:-}" ]; then
+    if [ -L "${_app_link}/var" ]; then
+        TRIM_PKGVAR="$(readlink -f "${_app_link}/var" 2>/dev/null)"
+    fi
+fi
+unset _app_link
+
+[ -z "${TRIM_PKGVAR:-}" ] && exit 0
+[ -d "${TRIM_PKGVAR}/data" ] || exit 0
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+BACKUP_ROOT="${TRIM_PKGVAR}/backups"
+STAMP="$(date '+%Y%m%d-%H%M%S')"
+DEST="${BACKUP_ROOT}/pre-upgrade-${STAMP}"
+
+mkdir -p "${DEST}" 2>/dev/null || exit 0
+
+# 逐项复制并容忍缺失：save/ 或 config.json 在全新安装里可能还不存在。
+[ -f "${TRIM_PKGVAR}/data/config.json" ] && \
+    cp -p "${TRIM_PKGVAR}/data/config.json" "${DEST}/config.json" 2>/dev/null
+[ -d "${TRIM_PKGVAR}/data/save" ] && \
+    cp -Rp "${TRIM_PKGVAR}/data/save" "${DEST}/save" 2>/dev/null
+
+if [ "$(id -u)" = "0" ]; then
+    chown -R "${TRIM_USERNAME:-${APPNAME}}:${TRIM_GROUPNAME:-${APPNAME}}" "${DEST}" 2>/dev/null || true
+fi
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') - upgrade_init: 数据已快照到 ${DEST}" >> "${LOG_FILE}" 2>/dev/null
+
+# 只留最近 3 份
+if [ -d "${BACKUP_ROOT}" ]; then
+    ls -1d "${BACKUP_ROOT}"/pre-upgrade-* 2>/dev/null | sort -r | tail -n +4 | while read -r old; do
+        rm -rf "${old}" 2>/dev/null
+    done
+fi
+
+exit 0

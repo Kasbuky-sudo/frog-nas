@@ -1,0 +1,34 @@
+#!/bin/bash
+# 升级后：补齐数据目录、移交属主、记日志。
+#
+# 本项目的数据格式稳定，升级不需要迁移；存档在 ${TRIM_PKGVAR}/data，
+# 与 app 目录无关，所以升级覆盖程序不会动到进度。
+#
+# 例外（已知）：用 `app install-fpk` 手工覆盖安装时 fnOS 不走本钩子。
+# 因此这里做的每件事都必须是"幂等且可缺省"的——缺了也不能让应用起不来。
+APPNAME="frog-nas"
+
+_app_link="/var/apps/${APPNAME}"
+if [ -z "${TRIM_PKGVAR:-}" ] || [ ! -d "${TRIM_PKGVAR:-}" ]; then
+    if [ -L "${_app_link}/var" ]; then
+        TRIM_PKGVAR="$(readlink -f "${_app_link}/var" 2>/dev/null)"
+    fi
+fi
+unset _app_link
+
+[ -z "${TRIM_PKGVAR:-}" ] && exit 0
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+APP_USER="${TRIM_USERNAME:-${APPNAME}}"
+APP_GROUP="${TRIM_GROUPNAME:-${APPNAME}}"
+
+mkdir -p "${TRIM_PKGVAR}/data/save" "${TRIM_PKGVAR}/data/logs" "${TRIM_PKGVAR}/logs" 2>/dev/null
+if [ "$(id -u)" = "0" ]; then
+    chown -R "${APP_USER}:${APP_GROUP}" "${TRIM_PKGVAR}/data" "${TRIM_PKGVAR}/logs" 2>/dev/null || true
+    [ -f "${LOG_FILE}" ] && chown "${APP_USER}:${APP_GROUP}" "${LOG_FILE}" 2>/dev/null || true
+fi
+
+VER="$(grep -m1 '^version' "/var/apps/${APPNAME}/manifest" 2>/dev/null | tr -d ' ' | cut -d= -f2)"
+echo "$(date '+%Y-%m-%d %H:%M:%S') - upgraded to ${VER:-未知版本}" >> "${LOG_FILE}" 2>/dev/null
+
+exit 0

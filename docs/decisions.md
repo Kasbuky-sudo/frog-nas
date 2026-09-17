@@ -1,0 +1,118 @@
+# 决策记录 / Decisions
+
+按项目约定，提示词未覆盖的细节由"最贴近原版体验 + 架构最简"自行决定，
+每条记一行。这里按主题分组，并写明**为什么**。
+
+## 架构
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D1 | 引擎只在服务端跑一份（Route A），浏览器是纯渲染+输入端 | 单一权威、单一存档；多端天然看到同一个世界 |
+| D2 | 用 `node:vm` 沙箱加载 `__offline-engine.js`，不 fork 也不改写 | 文件头明确写着它设计为同时支持"包在 WS 服务后面"与"内联进页面"；沙箱是最贴近 Route A 原文的用法，且零修改 |
+| D3 | 沙箱里必须同时给 `window`/`global`/`self` 三个别名 | bundle 是 `(function(global){...})(window)`，只给 `global` 会让 `window.FrogEngine` 挂到空对象上 |
+| D4 | 不注入真 `fs`：文件里 `require('fs')` 命中的是它自带的 localStorage 桩 | 注入真 fs 会让 `savePath` 变成相对 CWD 的路径，和引擎的三级恢复链对不上 |
+| D5 | 一个进程、一个端口、一个引擎实例 | WS 桥与 REST 都必须作用于同一个世界；拆开就得引入 IPC 或第二份引擎（后者直接违反 D1） |
+| D6 | 网页与 API 共用一个 Express 实例（`/ws` 挂在同一个 http server 上） | 少一个端口、少一份配置；反代也只需转发一个上游 |
+| D7 | 不引入数据库/Redis/Chromium | 状态就是引擎的内存对象 + 一个 JSON 存档文件；加任何一层都没有收益 |
+| D8 | 依赖只有 `express` 与 `ws` | 两者都是必需（HTTP 路由 + WebSocket 服务端）。图片合成改用 Node 内置 `zlib` 自己实现（D14） |
+
+## 游戏文件
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D9 | 磁盘上的游戏文件**一个字节都不改**；所有适配在响应期完成 | 提示词硬性要求；也让"重新 fetch-source 后行为一致"成为可验证的事实 |
+| D10 | Route A 默认化用**注入一行 `history.replaceState` 补 `?transport=ws`** | 探针只在 URL 带这个参数时才跳过页内回环；用重定向会改掉用户看到的 URL 并丢掉 `?log=1` 之类的参数 |
+| D11 | shim 注入在 `<head>` 之后、两个 `<script>` 之前 | 必须在 `__probe.js` 求值前生效，否则页内引擎已经装好了回环 |
+| D12 | `gameConfig.json` 在响应期改写 `gameServer`，并**保留一份 `vendor/gameConfig.original.json`** | 改写永远从原版字节出发，不受上一次改写影响；`X-Forwarded-Proto` 决定 ws/wss，支持 TLS 反代 |
+| D13 | CSP 用 `default-src 'self'` + `'unsafe-inline'` + `'unsafe-eval'` | inline 是必需的（index.html 有内联启动脚本，Egret 运行时注入 `<style>`）；`'unsafe-eval'` 只需覆盖 GM 调试分支，但去掉它会让 `?showGM=1` 变得不可用——保留并记录，因为**外联由 `connect-src` 单独锁死**，这才是去联网的关键 |
+| D14 | 明信片图片由服务端**自己合成**（zlib + 手写 PNG 解码器），不引第三方图像库 | 依赖预算优先。游戏里 88% 的 PNG 是 8bit RGBA 非交错，解码器只需支持这一族；解不开的图层跳过而不是让整条推送失败 |
+| D15 | 明信片渲染结果缓存在 `data/cache/postcards/` | 一个 pic_id 的字节是不变的，重渲染纯属浪费 |
+
+## 存档与配置
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D16 | 宿主**不额外包装**存档读写，完全交给引擎的原子写 + 三级恢复链 | 加第二层安全网等于制造第二套真相；引擎已经在 `state.__saveReport` 里报告恢复来源 |
+| D17 | 每个 localStorage 键落成 `data/save/<key>.json` 一个文件 | 键名天然就是合法文件名；备份/临时/损坏槽自动各成一个文件，语义与浏览器一致 |
+| D18 | 主存档键保持 `frog.offline.save` 不变 | 引擎的第一级恢复依赖这个固定键；改名会让手机版存档无法加载 |
+| D19 | 配置放 `data/config.json`（含 API token），不放环境变量 | token 要能在设置页查看/重置，环境变量做不到；`FROG_*` 仍可被真环境变量覆盖，方便 compose 与测试 |
+| D20 | 真环境变量**优先于** `config.json` 里的 `FROG_*` | 集成测试与 compose 需要在不改操作者文件的前提下改节奏 |
+| D21 | `PUBLIC_URL` 环境变量优先于设置页的同名项 | compose 里配一次就不用再进网页 |
+| D22 | `FROG_FAITHFUL` 默认 `1` | 提示词要求"按原版真实时长"；缩短时长只是给测试和试玩用的 |
+
+## API
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D23 | 游戏内部的拒绝（草没熟、券不够、买不了）返回 **200 + `ok:false`**，不返回 4xx | "游戏说不行"是正常结果，调用方必须处理；把它变成 HTTP 错误会让 agent 误以为接口坏了 |
+| D24 | 只有 `GET /api/health` 免认证 | 容器 healthcheck 需要它；它只暴露存活状态 |
+| D25 | token 比较用 `crypto.timingSafeEqual` | 避免用响应时间猜 token |
+| D26 | 格子类型校验放在 **API 层**，用引擎自己的槽位表 | 引擎的 `item_putin_*` 故意不校验（游戏里由 UI 挡）；API 没有 UI，但规则仍来自引擎的表，不是重新发明 |
+| D27 | `/api/shop/buy` 同时接受 `shopId` 与 `itemId` | wire 指令用的是**货架号**，但对人/agent 来说物品 id 更自然；换算放在服务端，避免调用方猜 |
+| D28 | `guest_serve` 的结果靠 `state.guest.served` 判定，不靠回包 | 该协议 `needResponse:false`，成功失败都返回 `undefined` |
+| D29 | `/api/visitor/feed` 默认投喂"家里实际有"的最爱特产，图鉴里有但家里没有时明确报错 | 客户端投喂走 `consumeHouseItem`（扣家里的），只查图鉴会误判 |
+| D30 | OpenAPI 文档与路由由**测试**保证一致，不靠人工维护 | 见 `test/unit/skills-consistency.test.js`；同类测试也校验 5 个 SKILL.md 里的路径与字段 |
+| D31 | GM 指令台通过 `/api/debug/gm` 暴露，但**默认关闭**（需 `FROG_ENABLE_GM_API=1`） | 它能改存档（加物品、强制出门）。集成测试需要它来构造前置条件；生产不该开 |
+
+## 推送
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D32 | 事件靠**状态差分**产生，不依赖引擎主动推消息 | 关着浏览器时引擎依然在 tick，差分是唯一能发现"蛙回家了"的方式 |
+| D33 | 明信片单独成一个事件，且同时监听 `albumPending` | 旅行照片先落在「新照片」，只盯 `pictures` 会漏掉整个事件 |
+| D34 | 免打扰期间**排队不丢弃** | "凌晨两点回家了"在早上七点仍然值得知道 |
+| D35 | 明信片图片走 `/asset/postcard/<picId>`，**不挂 `/api`** | MeoW 与 webhook 接收方自己来取图，没法带 Bearer 头；且它只暴露本来就公开的美术资源 |
+| D36 | 自定义 webhook 的模板渲染区分"在引号内/外" | 单纯字符串替换会产出 `"{"a":1}"` 这种坏 JSON（已实测踩到） |
+| D37 | MeoW 用 POST 优先，但保留 GET | POST 传 JSON body，标题里的特殊字符不用转义；GET 作为兼容退路 |
+| D38 | MeoW 成功判据是响应体 `status === 200` | 服务端把业务错误（昵称不存在）包在 HTTP 200 里 |
+| D39 | 默认只订阅 `depart`/`postcard`/`return`/`visitor_arrive`/`visitor_gift` | 这五个是玩家真正想被通知的；其余（`lottery`/`title_unlock`/…）默认关，避免噪音 |
+
+## 部署与文档
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D40 | `vendor/` 不入 git，由 `fetch-source` 生成 | 提示词要求；镜像里也不含从网上抓取版权素材的逻辑 |
+| D41 | Dockerfile 不下载游戏源，vendor 由宿主机准备好再 build | 同上；也让镜像构建可离线完成 |
+| D42 | 用 `tini` 做 init | 让 SIGTERM 真的到达 node，server.js 收到后会把存档落盘再退出 |
+| D43 | 容器以非 root 的 `node` 用户运行 | 基础镜像自带；`data/` 与 `vendor/` 都 chown 给它 |
+| D44 | 网络审计由脚本生成（`docs/network-audit.md`），并给每个主机写明用途 | 让"唯一出站是推送"成为可复查的结论；未分类主机会被单独标出 |
+| D45 | 测试用 `node:test`，不引测试框架 | Node 22+ 自带，依赖预算优先 |
+| D46 | 集成测试起**子进程**并用自己的临时 `data/` 目录 | 覆盖"容器从零启动"，且不会碰操作者的 `./data` |
+| D47 | 版权弹层原样保留、每次启动可见（含探针在弹层消失前静音的处理） | 提示词硬性要求；测试里有一条断言守着 |
+| D48 | **不裁剪 `vendor/resource` 的美术资源，接受镜像约 470MB（超出 300MB 目标）** | 我尝试判断"哪些资源未被引用"，但 `default.res.json` 的键是扁平文件名而非路径，文本比对会得出"99.97% 是孤儿"这种明显错误的结论。真正的引用关系要走 Egret 的资源配置逻辑，风险大于收益——少一个资源就是游戏里一处空白或一次报错。提示词把"原汁原味完整可玩"放在首位，体积目标让位于它。实测构成与可选的取舍写在 `docs/acceptance.md` 的「镜像体积」一节 |
+| D49 | 额外注入一段**转屏 shim**，在 resize/orientationchange 时重算缩放模式 | `index.html` 只在加载时按宽高比选一次 `data-scale-mode`，游戏本身没有转屏处理。实测：竖屏加载后转横屏会沿用 stale `fixedWidth`，舞台变成 640×380，只剩设计高度的 1/3，底部按钮全部点不到。shim 用**与 index.html 完全相同的规则**重算，只在真的变了时写 `stage.scaleMode` 并触发 resize——用引擎自己的机制，不重新实现布局。横屏保持"完整竖屏居中 + 两侧留白"，不重排成横屏 UI，因为原版 APK 就是锁竖屏的 |
+| D50 | ~~加一个浮动的「设置」球跳到 /admin~~ **已移除**（见 D55） | 最初加它是因为"改造公告按钮不可靠"。后来查明公告按钮**可以**可靠接管（D51），而两个入口对同一个页面是冗余的，球还挡住了庭院左下角的美术。现已删除，公告按钮是唯一的游戏内入口 |
+| D51 | 游戏里右侧的**「公告」按钮**在原位改跳 /admin——**仅当公告列表为空时** | 追查结果：该按钮是 `Menu.exml` 的 `ticketDetailBtn`，打开 `TicketDetailController` → `TicketDetailView`，内容来自公告列表。**这条列表在本项目里可证明恒为空**：引擎里搜不到 `anns` 字段、也从不提「公告」，唯一的 publicity handler 直接返回 `{id_list: []}`，而客户端填充列表走的是 `BaseChannel.getAnnInfo()` → Ejoy **原生**桥（浏览器里是 no-op 桩）。所以这是个数据源已消失的死路，不是"以后可能恢复"的功能。做法是包住 `PageManage.addViewControl`：为空时跳 /admin 且**不打开空面板**；列表若真有内容则原样打开真实面板——**接管死路，不是删除功能**。识别用 `cls.prototype.__class__`（两侧双下划线，探针也用这个；`__class` 是另一个未设置的属性，而压缩后的构造函数源码对每个控制器都一样，无法区分） |
+| D52 | 「公告」跳转用**同标签页导航**，不用 `window.open` | 实测：Egret 合成事件触发的 `window.open('/admin','_blank')` 被弹出窗口拦截器静默丢弃（返回 null）。同标签页导航不会被拦。代价是离开游戏页——玩家是主动点设置，可以接受，而且游戏状态在服务端，回来即续 |
+| D53 | 给「shim 本身」加单元测试：每个 shim 必须能被 `new vm.Script()` 解析、且不含 `${` | 写 D51 时真的踩到了：shim 是模板字符串，注释里写一个反引号就把字符串提前闭合，导致 `src/static.js` 语法错误、**服务起不来**。这类事故只能在"把 shim 当代码解析"这一层拦住，靠肉眼 review 会漏 |
+| D54 | NAS/Docker 移植版署名 **Kasbuky**，写在：开屏声明（响应期注入一行）、`/admin` 页脚、README、`Dockerfile` 的 OCI `LABEL` | 用户要求"docker 版写来自 Kasbuky"。**只在开屏声明里加行、不删改任何原文**：Hit-Point 的版权、Balticx 的离线版署名、非商业声明全部逐字保留，弹层仍须每次手动点掉。声明里明确写"NAS / Docker 移植"而不是泛指作者——游戏本体和离线引擎都不是移植者的作品，措辞不能让人误读成对游戏主张权利。有一条测试把服务端输出里的这一行删掉后与源文件**逐字节比对**，证明除了这一行没有任何改动 |
+| D55 | 删掉「设置」球；**同时强制保持公告按钮在教程期间可见** | 球与公告跳转是同一个页面的两个入口，冗余，且球压在庭院左下角美术上。但删球之前实测发现一个新问题：**新存档在教程阶段公告按钮是隐藏的**（`guideStep: New` 时 `ticketDetailBtn.visible === false`，和商店/小屋/邮件一起被 `disabledOrEnableUI` 关掉）。公告现在是唯一入口，如果就这样删球，**全新玩家将无法进入设置页**。所以 shim 里加了一个 1.5 秒的轻量巡检，只在三项状态真的不对时写回 `visible/includeInLayout/touchEnabled`——稳态成本是三次属性读取 |
+| D56 | `/admin` 加**两个**「返回游戏」入口：标题栏常驻 + 滚动后浮出的固定按钮 | 因为公告跳转是**同标签页导航**（D52），设置页没有返回按钮就会把玩家困住（用户实测反馈）。顶部按钮在一个有 19 项引擎开关加日志查看器的长页面上会滚出视野，所以再加一个 `position:fixed`、`scrollY > 320` 才出现的浮动按钮。有一条测试断言两个链接都存在、都指向 `/`、且顶部那个排在第一个设置卡片之前 |
+| D57 | 游戏右侧菜单：**公告改标题为「推送设置」**，**隐藏春联贺卡 + 做蛋糕**，**把做贺卡那张牌改造成「编辑」** | 三条都是用户要求。做法见 D58/D59。最终菜单：总结 / 日历 / **编辑** / 扭蛋机 / **推送设置** / 商店 / 小屋。隐藏的是"春联贺卡"和"做蛋糕"两张，保留的一张（祝福贺卡位）被改造成编辑入口——**保留它是因为那张牌的美术还在**，比在 CSS 里画一个仿制品更贴原版 |
+| D58 | 牌面文字用**响应期注入的 DOM 覆盖层**改写，而不是改游戏资源 | 菜单牌的标题是**画进位图里的**（`ticketDetailBtn` 的子树里只有 Image 和骨骼，没有 `eui.Label`），所以没有文本对象可以改。两个覆盖层都用**采样自游戏自己位图的配色**（木色 `#ecc573` 系、边框 `#6b7a52`、标题墨色 `#a1844c`）。「推送设置」是一块只盖住标题条的**色带**（图标保持原样）；「编辑」是**整块不透明覆盖**（因为它要盖掉原来的图标+文字，否则两层字会叠成噪声）。位置每 900ms 从活的 `localToGlobal` 重算，所以菜单滚动、转屏、缩放变化都不会错位 |
+| D59 | 「推送设置」的覆盖层 `pointer-events:none`；「编辑」的覆盖层**吞掉**事件 | 推送设置那张牌本身的 TOUCH_TAP 已经指向 /admin，覆盖层必须对输入透明，否则会挡掉真正要用的那次点击。「编辑」相反：牌下面还挂着原来的 TOUCH_TAP（会打开做贺卡活动），所以它在捕获阶段把 pointer/touch/mouse 全部 `stopImmediatePropagation`，只留自己的 click 去开编辑器。另外 `click` **不在**吞事件的列表里（它有独立的监听器，否则一次点击会被处理两次） |
+| D60 | 「编辑」直接调用探针球的 `onclick` 来**开关**存档面板，绝不自己设 `display` | **这条是踩坑后修正的。** 第一版为了"确保打开"在调用后强制 `panel.style.display='block'`，把探针本来的开关逻辑压掉了——结果面板**只能开不能关**，而且只能再去按原来那个圆球才能关（用户实测反馈：糟糕）。现在纯粹委托给探针自己的 `onclick`（它就是读状态→翻转→打开时顺便重定位面板并清状态栏），这正是"复刻原逻辑：按一次开，再按一次关"。**两条硬规则由测试守着**：不得出现 `panel.style.display = 'block'`，不得出现 `ball.click()` |
+| D62 | 探针吞掉一次调用时**重试**，而不是强制 | 探针的 `onclick` 开头有 `if (suppressClick) { suppressClick = false; return; }`——拖拽圆球后会吞掉紧接着的那一次调用。所以先记 `before` 状态、调用、再比对：**没变才再调一次**（说明被吞了）。这样既不破坏开关语义，也能穿透那次吞调用 |
+| D63 | 「编辑」牌要**看得出开/关状态**，且对比必须明显 | 三条线索：`aria-pressed`、tooltip 在「打开/关闭存档编辑器」之间切换、以及视觉上的按下态。视觉一开始只用内阴影，**截图对比几乎看不出差别**（等于没用），改成：打开时整块 `brightness(.86) saturate(.9)` + 图标文字降到 0.55 透明度 + 下沉 1px。改完两种状态一眼可辨 |
+| D61 | 加一条**结构性测试**：shim 模板字符串内不得出现游离的反引号 | 写 MENU_SHIM 时被这个坑连中三次：注释里写一个反引号就提前闭合模板字符串，`src/static.js` 直接语法错误、**服务起不来**。测试逐个定位 `const X_SHIM = \`<script>` 并断言在 `</script>\`;` 之前没有第二个反引号。这类问题必须靠结构检查，肉眼 review 会连续漏 |
+
+| D64 | **API token 默认关闭**：AI 只要知道地址就能用，不用再配密钥 | 用户反馈"不要那么多没有意味的 API Token，太麻烦了"。这台服务器跑在自家局域网里，agent 学会 skill 后本来就只知道 IP:port，再要求一个必须从网页复制的密钥是纯摩擦。token 仍然保留（设置页仍显示、仍能重置）并加了一个开关 `requireToken`，当 8980 可能被不信任的设备访问（端口转发、公网反代、共享网络）时打开即可。`/api/health` 始终免校验，供容器健康检查 |
+| D65 | 「回家」通知**点名带了什么**，不只是报数量 | 用户要的通知内容是"回来了、带了什么什么"。之前只报"带回 1 张照片、1 件特产"；现在从特产集合的差分里取出新增的条目，用 `gamedata` 查成中文名（"带了双皮奶、豆腐乳"）。只列前三四个，再多就退回报数量——手机上读不完的清单没有意义 |
+| D66 | 新增 `clover_ready` 事件（**菜熟了**），默认开启 | 用户明确要求"植物正常生长"也要通知。它按**跨越**触发（0 → n）而不是每拍都报，所以一片一直熟着的院子不会反复响；`state.clovers` 用引擎自己的 `cloverStatus` 规则判定（`last_harvest === -1` 空、`+rebirth_span > now` 生长中、其余可收），四叶草单独点名，因为它给的是道具不是三叶草。这是**唯一纯靠时间触发**的事件——没有别的事发生时它也会响，正是"后台还活着"的信号 |
+| D67 | 删掉探针的「存档编辑」圆球，但**保留该 DOM 元素**（`display:none`） | 用户问"那个圆球还没删啊"。它和「编辑」牌是同一个面板的两个入口，冗余。但**不能真的删掉元素**：`toggleSaveEditor()` 是靠调它的 `onclick` 来开关面板的（D60），删了「编辑」就失效。所以只隐藏，并且每 900ms 重新断言一次（探针自己的 resize 处理器可能把它恢复）。副作用：探针把面板定位在圆球旁边，圆球一隐藏面板会贴到角落——所以打开时改成**居中**（实测 430×800 下落在 108,96） |
+| D68 | fnOS 桌面入口从「新标签页」改成**页内 iframe**（`ui/config` 的 `type: url` → `iframe`），并**删掉 `X-Frame-Options: SAMEORIGIN`**，改用 CSP 的 `frame-ancestors 'self' http: https:` | 用户要求"不是新开一个网页，而是页内格式"。飞牛桌面点图标时的地址拼接规则是 `{protocol}://{当前浏览器 hostname}:{port}{url}`——桌面在 :5666、应用在 :8980，**端口不同就是跨源**。跨源 iframe 下只要响应带 `X-Frame-Options: SAMEORIGIN`，浏览器就拒绝渲染：表现为**「页内打开一片空白，而新标签页打开一切正常」**，极易被误判成前端 bug。X-Frame-Options 只有 DENY/SAMEORIGIN 两个取值，表达不了"放行某个跨源祖先"，所以删掉它、把白名单交给 CSP 的 `frame-ancestors`。同机的 `FnOS_UI_Mods` 就是 `type: iframe` + `protocol/port` 直连的可用形态，与之对齐。回归测试见 `test/unit/static.test.js` 的「iframe: 不发 X-Frame-Options，且 CSP 放行 frame-ancestors」 |
+| D69 | **真机安装改用 NAS 自带的 `/usr/local/bin/appcenter-cli`（root），不再只依赖 `trim-cli`** | 官方文档给的 SSH 安装方式就是 `appcenter-cli install-fpk`。它跟 `trim-cli` 是两个东西：**`trim-cli install-fpk` 遇到 `install_dep_apps` 会拒绝**（`dependency app changes that require App Center UI`），而 `appcenter-cli` 直接接受，装完 app-center 侧 `dependencyAppNames` 正确变成 `["nodejs_v22"]`——这正是"安装时顺带装前置应用"该有的样子。另外踩到一个隐蔽的假成功：**`appcenter-cli install-fpk` 对已安装的同名应用只回一句 `Application [x] is installed.`（rc=0），实际什么都不做**——不换文件、不重启进程，只有 `checksum` 能戳穿它。所以升级必须 `uninstall` → `install-fpk`。这条路径的代价是绕过 fnOS 自己的升级通道（同样不触发 `upgrade_init/upgrade_callback`），`/vol1/@appdata/<app>` 在卸载后保留，但仍应先备份 |
+
+## 已知限制
+
+| # | 限制 | 说明 |
+|---|---|---|
+| L1 | 本机没有 Docker，镜像未在真实 NAS 上构建验证 | 见 `docs/acceptance.md`；Dockerfile/compose 已按 `node:22-slim` 写好，构建步骤与自查项在 README 里 |
+| L2 | 浏览器 E2E 冒烟（Playwright）未接入 CI | 项目未引 Playwright（依赖预算）；浏览器实测步骤与结果见 `docs/acceptance.md` 的 §1/§4/§7 |
+| L3 | `koto_*`（另一活动）、排行榜、淘宝/微信相关协议未实现 | 属于已关闭的活动或需要真实服务端，不在移植范围内 |
+| L4 | 明信片合成配方是**重建**的，不是原版数据 | 引擎作者已在注释里标注；本项目只借用，不改 |
+| L5 | 免打扰队列只在内存里 | 重启期间的排队事件会丢；换取的是不再多写一个状态文件 |
+| L6 | 镜像体积约 470MB，超出 300MB 目标 | 见 D48：游戏美术本身 264MB 且全部为运行所需，无法在不冒可见损坏风险的前提下裁剪 |
+| L7 | MeoW 真机投递未实测 | 需要绑定 MeoW 的鸿蒙设备；请求构造有单测覆盖（含官方两种调用形式与"响应体 status 判定"规则） |
+| L8 | 通过 **HTTPS(:5667)** 打开飞牛桌面时，「页内打开」会被浏览器按**混合内容**拦掉 | `ui/config` 声明的是 `protocol: http` + `port: 8980`，而桌面是 https 页面 → 嵌套的 http iframe 属于混合内容，被拦。同机其他第三方应用（`FnOS_UI_Mods` 等）同样如此，属飞牛这套直连模式的通病。根治要走飞牛的**统一网关**：`protocol: ""` + `gatewayPrefix` + `gatewaySocket`，由飞牛的 nginx 同源反代到应用自建的 unix socket（`miyin` 就是这个形态）。那样 iframe 与桌面同源——`X-Frame-Options: SAMEORIGIN` 反而可以留着，还能顺带拿到飞牛鉴权与主题变量。代价是 `cmd/main` 要起 unix socket 并处理 `/app/frog-nas/` 前缀，改动比这次大，暂未做 |
+| L9 | 真机升级必须**先卸载再装**，因此 `upgrade_init/upgrade_callback` 在实际路径上不会被执行 | 见 D69：`appcenter-cli install-fpk` 对已安装应用是空操作（只打印 "is installed"）。本项目的钩子里是"迁移/快照"类操作，都写成缺了也不影响启动的幂等逻辑；升级前的快照实际由 `install_init` 之外的手工备份兜住 |

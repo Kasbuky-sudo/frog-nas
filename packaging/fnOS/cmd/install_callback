@@ -1,0 +1,47 @@
+#!/bin/bash
+# 安装后：建数据目录、移交属主、记录运行时探测结果。
+#
+# 不在这里失败：此时 Node 运行时可能还没就绪（依赖由应用中心并行安装），
+# 装了一半再报错反而更难收场。真正缺运行时由 cmd/main start 明确报错。
+APPNAME="frog-nas"
+
+_app_link="/var/apps/${APPNAME}"
+if [ -z "${TRIM_PKGVAR:-}" ] || [ ! -d "${TRIM_PKGVAR:-}" ]; then
+    if [ -L "${_app_link}/var" ]; then
+        TRIM_PKGVAR="$(readlink -f "${_app_link}/var" 2>/dev/null)"
+    fi
+fi
+unset _app_link
+
+if [ -z "${TRIM_PKGVAR:-}" ]; then
+    exit 0
+fi
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+APP_USER="${TRIM_USERNAME:-${APPNAME}}"
+APP_GROUP="${TRIM_GROUPNAME:-${APPNAME}}"
+
+mkdir -p "${TRIM_PKGVAR}/data/save" "${TRIM_PKGVAR}/data/logs" "${TRIM_PKGVAR}/logs" 2>/dev/null
+if [ "$(id -u)" = "0" ]; then
+    chown -R "${APP_USER}:${APP_GROUP}" "${TRIM_PKGVAR}" 2>/dev/null || true
+fi
+
+{
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - installed (arch=$(uname -m) TRIM_SYS_ARCH=${TRIM_SYS_ARCH:-未注入})"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') -   APPDEST=${TRIM_APPDEST:-未注入}"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') -   PKGVAR=${TRIM_PKGVAR}"
+    NODE_BIN=""
+    for c in /var/apps/nodejs_v22/target/bin/node /var/apps/nodejs_v24/target/bin/node; do
+        if [ -x "${c}" ]; then NODE_BIN="${c}"; break; fi
+    done
+    if [ -z "${NODE_BIN}" ]; then
+        NODE_BIN="$(command -v node 2>/dev/null)"
+    fi
+    if [ -n "${NODE_BIN}" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') -   node=${NODE_BIN} $("${NODE_BIN}" -v 2>/dev/null)"
+    else
+        echo "$(date '+%Y-%m-%d %H:%M:%S') -   WARNING: 未找到 Node 运行时，应用中心可能还在安装 nodejs_v22"
+    fi
+} >> "${LOG_FILE}" 2>/dev/null
+
+exit 0

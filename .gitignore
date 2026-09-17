@@ -1,0 +1,47 @@
+# ---- game source (never in git: see §0.4 of the project brief) -------------
+vendor/
+# A stray hand-made copy of the resource tree at the project root is also game
+# source. Nothing in src/ reads it (the server serves vendor/resource), so it is
+# ignored rather than served -- anchored to the root so a nested resource/ dir
+# somewhere legitimate would not be caught by this rule.
+/resource/
+
+# ---- runtime state (saves, config, logs) ----------------------------------
+data/
+*.log
+
+# ---- dependencies / build --------------------------------------------------
+node_modules/
+npm-debug.log*
+*.tsbuildinfo
+
+# ---- fnOS 打包产物（.fpk 有 200MB+，绝不进版本库）---------------------------
+/dist/
+/.build-staging/
+# packaging/fnOS/app/ 是 fnpack 的生成目录，正常流程不用它（打包走 .build-staging），
+# 但手工调 fnpack 时会出现，一起忽略免得误提交。
+/packaging/fnOS/app/
+
+# ---- 本地作业区（绝不进公开仓库）---------------------------------------------
+# .workbuddy/ 是本机的记忆与勘察工具目录：tools/ 下的探测脚本里含内网地址与
+# 明文口令，memory/ 是工作日志。仅本地留存，不提交。
+/.workbuddy/
+
+# ---- local recon scratch ---------------------------------------------------
+tmp-recon/
+.audit-tmp/
+# 勘察期留下的动画探针数据库（src/ 下无人引用）
+data-anim/
+# fnpack 的临时构建/校验目录（每次打包重新生成）
+/.build-verify/
+# 根目录这张只是 packaging/fnOS/assets/icon-source.png 的手工副本，
+# 权威副本在 packaging/ 下（make-icons.py 读的是那一份）。
+/512.png
+
+# ---- OS / editor -----------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/

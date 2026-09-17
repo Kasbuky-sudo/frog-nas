@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8">
+  <title>旅行青蛙 · NAS 设置</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root {
+      --bg: #f6f2e6;
+      --card: #fff;
+      --ink: #4a4437;
+      --dim: #8b8371;
+      --line: #e2dccd;
+      --green: #7a9a5b;
+      --red: #b4483c;
+      --amber: #b98a2e;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      margin: 0;
+      padding: 22px 16px 60px;
+      line-height: 1.6;
+      font-size: 14px;
+    }
+
+    .wrap { max-width: 920px; margin: 0 auto; }
+    h1 { font-size: 19px; margin: 0 0 4px; letter-spacing: 1px; }
+    .sub { color: var(--dim); font-size: 13px; margin-bottom: 18px; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px 18px;
+      margin-bottom: 16px;
+    }
+
+    .card > h2 {
+      font-size: 15px;
+      margin: 0 0 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+    .row > label { min-width: 132px; color: var(--dim); font-size: 13px; }
+    input[type=text], input[type=password], input[type=number], select, textarea {
+      font-family: inherit; font-size: 13px; padding: 7px 10px;
+      border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink);
+      min-width: 0; flex: 1 1 220px;
+    }
+    textarea { min-height: 84px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+    button {
+      font-family: inherit; font-size: 13px; padding: 8px 16px; border-radius: 6px;
+      border: 1px solid var(--green); background: var(--green); color: #fff; cursor: pointer;
+    }
+    button.ghost { background: #fff; color: var(--green); }
+    button.danger { border-color: var(--red); background: #fff; color: var(--red); }
+    button:disabled { opacity: .5; cursor: default; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--dim); font-weight: 500; }
+
+    .kv { display: grid; grid-template-columns: 150px 1fr; gap: 4px 10px; font-size: 13px; }
+    .kv .k { color: var(--dim); }
+    code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+    pre { background: #fbf9f3; border: 1px solid var(--line); border-radius: 6px; padding: 10px;
+          font-size: 12px; max-height: 300px; overflow: auto; margin: 0; }
+
+    .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #eef3e7; color: var(--green); }
+    .pill.off { background: #f4ecec; color: var(--red); }
+    .pill.warn { background: #fbf3e2; color: var(--amber); }
+    .hint { color: var(--dim); font-size: 12px; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 700px) { .grid2 { grid-template-columns: 1fr; } .kv { grid-template-columns: 120px 1fr; } }
+    .toast {
+      position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+      background: #4a4437; color: #fff; padding: 10px 18px; border-radius: 6px; font-size: 13px;
+      opacity: 0; transition: opacity .2s; pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    .warnbox { background: #fbf3e2; border: 1px solid #e8d9b5; color: #7a5f1e; padding: 10px 12px;
+               border-radius: 6px; font-size: 12.5px; margin-bottom: 14px; }
+    .chk { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+    .chk input { flex: none; }
+    .evgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px 14px; }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+      <h1>旅行青蛙 · NAS 设置</h1>
+      <a href="/" id="back-to-game"
+         style="flex:none;font-size:14px;font-weight:600;padding:9px 20px;border-radius:8px;
+                background:var(--green);color:#fff;text-decoration:none;
+                box-shadow:0 2px 6px rgba(90,120,60,.28)">← 返回游戏</a>
+    </div>
+    <div class="sub">
+      服务端权威模式：引擎只在本容器里跑一份，存档在 <span class="mono">data/save/</span>。
+      游戏入口 <a href="/">/</a>，接口文档 <span class="mono">/api/openapi.json</span>。
+    </div>
+
+    <div class="warnbox">
+      ⚠ 本页会显示 API token，请勿把 8980 端口直接暴露到公网。放到反代后面时建议加上访问码。
+    </div>
+
+    <div class="card">
+      <h2>运行状态 <span id="health-pill" class="pill">…</span></h2>
+      <div class="kv" id="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>API 访问</h2>
+      <div class="row">
+        <label>要求 token</label>
+        <div class="chk"><input type="checkbox" id="require-token"><span>关闭时，AI 只要知道地址就能调用（默认关闭）</span></div>
+      </div>
+      <div class="hint">
+        默认<strong>不需要 token</strong>：在自家局域网里，让 AI 只记住
+        <span class="mono">http://NAS_IP:8980</span> 就能用，不必再配一个密钥。
+        只有当 8980 可能被不信任的设备访问（端口转发、公网反代、共享网络）时才建议打开。
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label>API Token</label>
+        <input type="text" id="api-token" readonly>
+        <button class="ghost" onclick="copyToken()">复制</button>
+        <button class="danger" onclick="resetToken()">重置</button>
+      </div>
+      <div class="hint">仅在「要求 token」打开时使用：<span class="mono">Authorization: Bearer &lt;token&gt;</span>。重置后旧 token 立即失效。</div>
+      <div class="row" style="margin-top:10px">
+        <label>对外地址</label>
+        <input type="text" id="public-url" placeholder="http://192.168.1.10:8980">
+        <button class="ghost" onclick="savePublicUrl()">保存</button>
+      </div>
+      <div class="hint">用于推送里拼明信片图片的绝对地址，可留空。</div>
+      <div class="row" style="margin-top:10px">
+        <label>访问码</label>
+        <input type="text" id="admin-code" placeholder="留空则本页不需要访问码">
+        <button class="ghost" onclick="saveAdminCode()">保存</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>推送 · 通道 A：自定义 Webhook</h2>
+      <div class="row">
+        <label>启用</label>
+        <div class="chk"><input type="checkbox" id="wh-enabled"><span>开启后事件会 POST 到这个地址</span></div>
+      </div>
+      <div class="row">
+        <label>URL</label>
+        <input type="text" id="wh-url" placeholder="https://webhook.site/xxxxxxxx">
+      </div>
+      <div class="row">
+        <label>自定义请求头</label>
+        <textarea id="wh-headers" placeholder='{"Authorization":"Bearer xxx"}'></textarea>
+      </div>
+      <div class="row">
+        <label>Body 模板</label>
+        <textarea id="wh-template" placeholder="留空用默认 JSON（含 event/title/body/timestamp/url/image）"></textarea>
+      </div>
+      <div class="hint">可用占位符：<span class="mono">{{event}} {{title}} {{body}} {{timestamp}} {{url}} {{image}} {{dataJson}}</span></div>
+    </div>
+
+    <div class="card">
+      <h2>推送 · 通道 B：鸿蒙 MeoW</h2>
+      <div class="row">
+        <label>启用</label>
+        <div class="chk"><input type="checkbox" id="mw-enabled"><span>用昵称推送到鸿蒙手表/手机</span></div>
+      </div>
+      <div class="row">
+        <label>昵称</label>
+        <input type="text" id="mw-nickname" placeholder="MeoW 里的昵称（接口只认昵称，没有 token）">
+      </div>
+      <div class="row">
+        <label>API 地址</label>
+        <input type="text" id="mw-apibase" placeholder="https://api.chuckfang.com">
+      </div>
+      <div class="row">
+        <label>发送方式</label>
+        <select id="mw-method">
+          <option value="POST">POST（推荐，JSON body）</option>
+          <option value="GET">GET（路径拼参数）</option>
+        </select>
+        <label style="min-width:auto">msgType</label>
+        <select id="mw-msgtype">
+          <option value="text">text</option>
+          <option value="html">html</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>默认图标 URL</label>
+        <input type="text" id="mw-imgurl" placeholder="可留空；明信片事件会自动带图片">
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>推送 · 事件与免打扰</h2>
+      <div class="row">
+        <label>总开关</label>
+        <div class="chk"><input type="checkbox" id="push-enabled"><span>关闭后所有事件都不推送</span></div>
+      </div>
+      <div class="evgrid" id="events"></div>
+      <div class="row" style="margin-top:12px">
+        <label>免打扰</label>
+        <div class="chk"><input type="checkbox" id="quiet-enabled"><span>开启</span></div>
+        <input type="text" id="quiet-from" style="flex:0 0 90px" placeholder="23:00">
+        <span class="hint">至</span>
+        <input type="text" id="quiet-to" style="flex:0 0 90px" placeholder="07:00">
+        <span class="hint">（期间的事件排队，窗口结束后补发）</span>
+      </div>
+      <div class="row">
+        <label>失败重试</label>
+        <input type="number" id="retry-attempts" style="flex:0 0 80px" min="1" max="6">
+        <span class="hint">次，首次退避</span>
+        <input type="number" id="retry-delay" style="flex:0 0 100px" min="0">
+        <span class="hint">毫秒（指数退避）</span>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button onclick="savePush()">保存推送配置</button>
+        <button class="ghost" onclick="testPush()">发送测试推送</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>引擎时长（FROG_CONFIG）</h2>
+      <div class="warnbox" style="margin-bottom:10px">
+        默认 <span class="mono">FROG_FAITHFUL=1</span>，按原版真实时长旅行（小时级）。
+        改成 0 会使用离线版缩短的时长（适合试玩）。保存后引擎会重启并重新读取存档。
+      </div>
+      <div class="row">
+        <label>FROG_FAITHFUL</label>
+        <select id="env-FROG_FAITHFUL" style="flex:0 0 260px">
+          <option value="1">1 — 原版真实时长（推荐）</option>
+          <option value="0">0 — 缩短时长（快速试玩）</option>
+        </select>
+      </div>
+      <div id="env-rows"></div>
+      <div class="row" style="margin-top:10px">
+        <button onclick="saveEnv()">保存并重启引擎</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>存档</h2>
+      <div class="row">
+        <button class="ghost" onclick="location.href='/admin/api/save/export'">导出存档</button>
+        <button class="ghost" onclick="document.getElementById('import-file').click()">导入存档…</button>
+        <input type="file" id="import-file" accept="application/json" style="display:none">
+        <button class="danger" onclick="resetSave()">重置存档</button>
+      </div>
+      <div class="hint">导入与重置都需要二次确认。引擎自带 主存档 → 备份 → 镜像 三级恢复，旧存档会先被归档而不是直接删除。</div>
+      <div style="margin-top:10px"><table id="save-table"></table></div>
+    </div>
+
+    <div class="card">
+      <h2>推送日志</h2>
+      <div class="row">
+        <button class="ghost" onclick="loadLogs()">刷新</button>
+        <span class="hint">data/logs/push.jsonl（最近 100 条）</span>
+      </div>
+      <pre id="push-logs">—</pre>
+    </div>
+
+    <div class="card">
+      <h2>浏览器日志</h2>
+      <div class="row">
+        <button class="ghost" onclick="loadClientLogs()">刷新</button>
+        <span class="hint">用 <span class="mono">/?log=1</span> 打开游戏后，页面的日志会 POST 到 /__log</span>
+      </div>
+      <pre id="client-logs">—</pre>
+    </div>
+
+    <div class="card" style="text-align:center;color:var(--dim);font-size:12.5px">
+      <div>NAS / Docker 移植：<b>Kasbuky</b></div>
+      <div style="margin-top:6px">
+        游戏著作权归 Hit-Point Co., Ltd.；离线版由 Balticx 制作。
+        仅供个人学习与非商业保存，请勿移除游戏开屏的权利归属声明。
+      </div>
+      <div style="margin-top:6px">
+        <a href="/" style="color:var(--green)">返回游戏</a>
+        &nbsp;·&nbsp;
+        <a href="/api/openapi.json" style="color:var(--green)">接口文档</a>
+        &nbsp;·&nbsp;
+        <a href="/skills/frog-status/SKILL.md" style="color:var(--green)">技能示例</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- A second "back to game" affordance that follows the scroll. The page is long
+       (19 engine knobs plus logs), so a top-only button means scrolling all the way
+       up just to leave. This is hidden while the page is already at the top, where
+       the header button is in view. -->
+  <a href="/" id="back-float"
+     style="position:fixed;right:18px;bottom:18px;z-index:50;display:none;
+            font-size:14px;font-weight:600;padding:10px 18px;border-radius:22px;
+            background:var(--green);color:#fff;text-decoration:none;
+            box-shadow:0 4px 12px rgba(60,50,30,.32)">← 返回游戏</a>
+
+  <script>
+    (function () {
+      var f = document.getElementById('back-float');
+      var toggle = function () {
+        f.style.display = window.scrollY > 320 ? 'inline-block' : 'none';
+      };
+      window.addEventListener('scroll', toggle, { passive: true });
+      toggle();
+    })();
+  </script>
+
+  <script>
+    const EVENTS = [
+      ['depart', '出发', '蛙离家时'],
+      ['postcard', '明信片', '收到新明信片'],
+      ['return', '回家', '蛙回家（附带回清单）'],
+      ['clover_ready', '三叶草熟了', '院子里的草长好了'],
+      ['visitor_arrive', '访客到访', '有客人来串门'],
+      ['visitor_gift', '访客回礼', '招待完成后的回礼'],
+      ['mail', '新邮件', '信箱有新邮件'],
+      ['lottery', '券够了', '抽奖券达到抽奖门槛'],
+      ['title_unlock', '新称号', '解锁称号'],
+      ['furniture_finish', '家具完成', '工作台制作完成'],
+    ];
+
+    let OVERVIEW = null;
+
+    const $ = (id) => document.getElementById(id);
+
+    function toast(msg) {
+      const t = $('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2200);
+    }
+
+    async function api(path, opts) {
+      const r = await fetch('/admin/api' + path, {
+        headers: { 'Content-Type': 'application/json' },
+        ...opts,
+      });
+      if (r.status === 401) { location.reload(); return null; }
+      if (r.status === 204) return {};
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { toast((j.error && j.error.message) || ('请求失败 ' + r.status)); return null; }
+      return j;
+    }
+
+    function fmtDuration(sec) {
+      if (sec == null) return '—';
+      const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+      if (d) return d + '天' + h + '小时';
+      if (h) return h + '小时' + m + '分';
+      return m + '分' + Math.floor(sec % 60) + '秒';
+    }
+
+    function renderStatus(o) {
+      const e = o.engine, s = o.save, p = o.push;
+      $('health-pill').textContent = e.ready ? '引擎运行中' : '引擎未启动';
+      $('health-pill').className = 'pill' + (e.ready ? '' : ' off');
+      const rows = [
+        ['蛙名 / 状态', s.name + ' · ' + ['在家', '外出', '待机', '聚会'][s.frogStatus] || s.frogStatus],
+        ['三叶草 / 抽奖券', s.clover + ' / ' + s.ticket],
+        ['旅行次数', s.tripCount],
+        ['明信片 / 特产', s.pictures + ' / ' + s.specialtys],
+        ['邮件 / 访客', s.mails + ' / ' + (s.guest == null ? '无' : s.guest)],
+        ['运行时长', fmtDuration(e.uptimeSec)],
+        ['引擎 env', '<span class="mono">' + JSON.stringify(e.env) + '</span>'],
+        ['存档目录', '<span class="mono">' + e.saveDir + '</span>'],
+        ['存档恢复', '<span class="mono">' + (e.saveInfo && e.saveInfo.report ? e.saveInfo.report.action + ' ← ' + (e.saveInfo.report.restoredFrom || '?') : '?') + '</span>'],
+        ['在线标签页', o.ws.clients + ' 个（共 ' + o.ws.stats.connections + ' 次连接）'],
+        ['Bot 握手', o.bot.loggedIn ? '已完成（' + o.bot.commands + ' 条指令）' : '未完成'],
+        ['推送', '<span class="mono">' + JSON.stringify(p.stats) + '</span>' + (p.queued ? '，免打扰排队 ' + p.queued + ' 条' : '')],
+        ['时区', o.tz],
+      ];
+      $('status').innerHTML = rows.map(([k, v]) => '<div class="k">' + k + '</div><div>' + v + '</div>').join('');
+
+      const st = $('save-table');
+      st.innerHTML = '<tr><th>存档文件</th><th>大小</th><th>修改时间</th></tr>' + e.saves.map((f) =>
+        '<tr><td class="mono">' + f.name + '</td><td>' + (f.size / 1024).toFixed(1) + ' KB</td><td>' +
+        new Date(f.mtime).toLocaleString() + '</td></tr>').join('');
+    }
+
+    function renderPush(p) {
+      $('push-enabled').checked = p.enabled;
+      $('quiet-enabled').checked = !!(p.quietHours && p.quietHours.enabled);
+      $('quiet-from').value = (p.quietHours && p.quietHours.from) || '23:00';
+      $('quiet-to').value = (p.quietHours && p.quietHours.to) || '07:00';
+      $('retry-attempts').value = p.retry.attempts;
+      $('retry-delay').value = p.retry.baseDelayMs;
+
+      $('wh-enabled').checked = p.webhook.enabled;
+      $('wh-url').value = p.webhook.url || '';
+      $('wh-headers').value = Object.keys(p.webhook.headers || {}).length
+        ? JSON.stringify(p.webhook.headers, null, 2) : '';
+      $('wh-template').value = p.webhook.template || '';
+
+      $('mw-enabled').checked = p.meow.enabled;
+      $('mw-nickname').value = p.meow.nickname || '';
+      $('mw-apibase').value = p.meow.apiBase || 'https://api.chuckfang.com';
+      $('mw-method').value = p.meow.method || 'POST';
+      $('mw-msgtype').value = p.meow.msgType || 'text';
+      $('mw-imgurl').value = p.meow.imgUrl || '';
+
+      $('events').innerHTML = EVENTS.map(([key, label, desc]) =>
+        '<label class="chk"><input type="checkbox" data-ev="' + key + '"' +
+        (p.events[key] !== false ? ' checked' : '') + '><span>' + label +
+        ' <span class="hint">' + desc + '</span></span></label>').join('');
+    }
+
+    function renderEnv(o) {
+      const cur = o.engine.env || {};
+      $('env-FROG_FAITHFUL').value = cur.FROG_FAITHFUL === '0' ? '0' : '1';
+      const skip = new Set(['FROG_FAITHFUL']);
+      $('env-rows').innerHTML = (o.editableEnv || []).filter((k) => !skip.has(k)).map((k) =>
+        '<div class="row"><label>' + k.replace('FROG_', '') + '</label>' +
+        '<input type="number" data-env="' + k + '" value="' + (cur[k] == null ? '' : cur[k]) + '" placeholder="默认">' +
+        '<span class="hint" style="flex:1 1 100%">' + (o.envCatalog[k] || '') + '</span></div>').join('');
+    }
+
+    async function load() {
+      const o = await api('/overview');
+      if (!o) return;
+      OVERVIEW = o;
+      $('api-token').value = o.apiToken;
+      $('require-token').checked = !!o.requireToken;
+      $('public-url').value = o.publicUrl || '';
+      $('admin-code').value = '';
+      $('admin-code').placeholder = o.adminCodeSet ? '已设置（留空则不改）' : '留空则本页不需要访问码';
+      renderStatus(o);
+      renderPush(o.push);
+      renderEnv(o);
+    }
+
+    async function copyToken() {
+      const el = $('api-token');
+      el.select();
+      try { await navigator.clipboard.writeText(el.value); toast('已复制'); }
+      catch (e) { document.execCommand('copy'); toast('已复制'); }
+    }
+
+    async function resetToken() {
+      if (!confirm('重置 API token？现有调用方会立即失效。')) return;
+      const r = await api('/token/reset', { method: 'POST' });
+      if (r) { $('api-token').value = r.apiToken; toast('token 已重置'); }
+    }
+
+    async function savePublicUrl() {
+      const r = await api('/public-url', { method: 'PUT', body: JSON.stringify({ url: $('public-url').value }) });
+      if (r) toast('已保存');
+    }
+
+    document.getElementById('require-token').addEventListener('change', async (e) => {
+      const on = e.target.checked;
+      if (on && !confirm('打开后，所有 /api 调用都必须带 Authorization: Bearer <token>。\n确认要在 API 客户端里配置 token 吗？')) {
+        e.target.checked = false;
+        return;
+      }
+      const r = await api('/require-token', { method: 'PUT', body: JSON.stringify({ requireToken: on }) });
+      if (r) toast(on ? '已开启：/api 现在需要 token' : '已关闭：/api 现在无需 token');
+      else e.target.checked = !on;
+    });
+
+    async function saveAdminCode() {
+      const code = $('admin-code').value;
+      if (code === '' && !confirm('留空表示关闭访问码，本页将不再需要验证。继续？')) return;
+      const r = await api('/admin-code', { method: 'PUT', body: JSON.stringify({ code }) });
+      if (r) { toast(code ? '访问码已设置' : '访问码已关闭'); load(); }
+    }
+
+    function collectPush() {
+      let headers = {};
+      const raw = $('wh-headers').value.trim();
+      if (raw) {
+        try { headers = JSON.parse(raw); }
+        catch (e) { toast('自定义请求头不是合法 JSON'); return null; }
+      }
+      const events = {};
+      document.querySelectorAll('[data-ev]').forEach((el) => { events[el.dataset.ev] = el.checked; });
+      return {
+        enabled: $('push-enabled').checked,
+        quietHours: {
+          enabled: $('quiet-enabled').checked,
+          from: $('quiet-from').value.trim() || '23:00',
+          to: $('quiet-to').value.trim() || '07:00',
+        },
+        retry: {
+          attempts: Number($('retry-attempts').value) || 3,
+          baseDelayMs: Number($('retry-delay').value) || 2000,
+        },
+        events,
+        webhook: {
+          enabled: $('wh-enabled').checked,
+          url: $('wh-url').value.trim(),
+          headers,
+          template: $('wh-template').value,
+        },
+        meow: {
+          enabled: $('mw-enabled').checked,
+          nickname: $('mw-nickname').value.trim(),
+          apiBase: $('mw-apibase').value.trim() || 'https://api.chuckfang.com',
+          method: $('mw-method').value,
+          msgType: $('mw-msgtype').value,
+          imgUrl: $('mw-imgurl').value.trim(),
+        },
+      };
+    }
+
+    async function savePush() {
+      const push = collectPush();
+      if (!push) return;
+      const r = await api('/push', { method: 'PUT', body: JSON.stringify(push) });
+      if (r) { renderPush(r.push); toast('推送配置已保存'); }
+    }
+
+    async function testPush() {
+      const push = collectPush();
+      if (!push) return;
+      await api('/push', { method: 'PUT', body: JSON.stringify(push) });
+      const r = await api('/push/test', { method: 'POST', body: JSON.stringify({}) });
+      if (!r) return;
+      if (!r.results || !r.results.length) { toast('没有启用的通道（先勾选并填写）'); return; }
+      toast(r.ok ? '测试推送已发出' : '推送失败，见下方日志');
+      loadLogs();
+    }
+
+    async function saveEnv() {
+      const env = { FROG_FAITHFUL: $('env-FROG_FAITHFUL').value };
+      document.querySelectorAll('[data-env]').forEach((el) => {
+        const v = el.value.trim();
+        if (v !== '') env[el.dataset.env] = v;
+      });
+      const r = await api('/engine-env', { method: 'PUT', body: JSON.stringify({ env }) });
+      if (r) { toast('已保存，引擎已重启'); load(); }
+    }
+
+    document.getElementById('import-file').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const text = await file.text();
+      let save;
+      try { save = JSON.parse(text); } catch (err) { toast('文件不是合法 JSON'); return; }
+      if (!confirm('导入会覆盖当前存档（旧存档会先被引擎归档）。确定继续？')) return;
+      const r = await api('/save/import', { method: 'POST', body: JSON.stringify({ save, confirm: true }) });
+      if (r) { toast('导入完成'); load(); }
+      e.target.value = '';
+    });
+
+    async function resetSave() {
+      if (!confirm('重置存档会清空全部进度（旧存档仍会被归档保留）。确定？')) return;
+      if (!confirm('真的确定？这一步不可撤销。')) return;
+      const r = await api('/save/reset', { method: 'POST', body: JSON.stringify({ confirm: true }) });
+      if (r) { toast('已重置'); load(); }
+    }
+
+    async function loadLogs() {
+      const r = await api('/push/logs?limit=100');
+      if (!r) return;
+      $('push-logs').textContent = r.entries.map((e) =>
+        [e.t, e.kind, e.channel || '', e.event || '', e.ok === undefined ? '' : (e.ok ? 'OK' : 'FAIL'),
+         e.error || '', e.title || ''].join('  ').trim()).join('\n') || '（暂无记录）';
+    }
+
+    async function loadClientLogs() {
+      const r = await api('/client-logs?limit=200');
+      if (!r) return;
+      $('client-logs').textContent = r.lines.join('\n') || '（暂无记录，用 /?log=1 打开游戏后会出现在这里）';
+    }
+
+    load();
+    setInterval(() => load().catch(() => { }), 15000);
+  </script>
+</body>
+
+</html>

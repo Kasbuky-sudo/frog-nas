@@ -1,0 +1,24 @@
+#!/bin/bash
+# 卸载后：刻意什么都不删。
+#
+# 存档在 ${TRIM_PKGVAR}/data，是用户几十小时喂出来的东西；程序包已经不在了，
+# 再顺手清掉数据就成了"卸载一次毁档一次"。要彻底清除请手动删除：
+#     /vol1/@appdata/frog-nas        （数据卷名按实际机器而定）
+#
+# 这里也不做 chown/rm 之类的动作：卸载后 @appdata 的属主可能已经不存在，
+# 任何写操作都可能留下半拉子状态。
+
+APPNAME="frog-nas"
+
+_app_link="/var/apps/${APPNAME}"
+PKGVAR="${TRIM_PKGVAR:-}"
+if [ -z "${PKGVAR}" ] && [ -L "${_app_link}/var" ]; then
+    PKGVAR="$(readlink -f "${_app_link}/var" 2>/dev/null)"
+fi
+unset _app_link
+
+if [ -n "${PKGVAR}" ] && [ -d "${PKGVAR}" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - uninstalled; 数据目录保留在 ${PKGVAR}/data" >> "${PKGVAR}/info.log" 2>/dev/null
+fi
+
+exit 0

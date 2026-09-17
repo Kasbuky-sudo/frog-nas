@@ -1,0 +1,279 @@
+#!/bin/bash
+# ===========================================================================
+# 旅行青蛙 · fnOS 原生应用生命周期
+#
+#   cmd/main start    启动（已在跑则幂等返回 0）
+#   cmd/main stop     优雅停止
+#   cmd/main status   运行中 exit 0 / 未运行 exit 3
+#   cmd/main restart  stop + start
+#
+# 运行时来自 manifest 的 install_dep_apps = nodejs_v22，由应用中心负责安装；
+# 这里通过 /var/apps/<dep>/target/bin 软链定位，所以数据卷是 /vol1 /vol2
+# 都不受影响，绝不写死卷名。
+# ===========================================================================
+
+APPNAME="frog-nas"
+SERVICE_JS="src/server.js"
+
+# --- TRIM_* 兜底解析 -------------------------------------------------------
+# fnOS 正常会注入全部 TRIM_*。若没注入、或指向已不存在的旧卷，就从
+# /var/apps/<appname> 的软链反推（hermes-studio 在真机上踩过"残留 /vol1
+# 默认值导致找错卷"的坑，所以这里宁可解析失败明确报错，也不塞默认路径）。
+_app_link="/var/apps/${APPNAME}"
+
+if [ -z "${TRIM_APPDEST:-}" ] || [ ! -d "${TRIM_APPDEST:-}" ]; then
+    # ⚠️ 必须先看 target，再退回 readlink -f。
+    # fnOS 布局里 /var/apps/<app> 是【真目录】（放 cmd/、manifest、config/），
+    # 应用代码在它下面的 target 软链里 → /vol1/@appcenter/<app>。
+    # 而 `readlink -f /var/apps/<app>` 对真目录返回【它自己】（不穿透），
+    # 于是 APP_DIR 被拼成 /var/apps/<app>/server —— 一个根本不存在的路径：
+    #   · status/stop 的进程特征串跟真实 cmdline（@appcenter 路径）对不上
+    #   · start 会 `cd` 到不存在的目录直接失败
+    # 真机实测：以普通用户跑 `cmd/main status` 返回 3（进程明明在跑）。
+    if [ -L "${_app_link}/target" ]; then
+        TRIM_APPDEST="$(readlink -f "${_app_link}/target" 2>/dev/null)"
+    elif [ -e "${_app_link}" ]; then
+        TRIM_APPDEST="$(readlink -f "${_app_link}" 2>/dev/null)"
+    fi
+fi
+if [ -z "${TRIM_PKGVAR:-}" ] || [ ! -d "${TRIM_PKGVAR:-}" ]; then
+    if [ -L "${_app_link}/var" ]; then
+        TRIM_PKGVAR="$(readlink -f "${_app_link}/var" 2>/dev/null)"
+    elif [ -n "${TRIM_APPDEST:-}" ]; then
+        _cand="$(printf '%s' "${TRIM_APPDEST}" | sed 's|/@appcenter/|/@appdata/|')"
+        [ -d "${_cand}" ] && TRIM_PKGVAR="${_cand}"
+    fi
+fi
+unset _app_link _cand
+
+# 统一成真实路径：TRIM_APPDEST 有时是软链形式，直接拿它拼进程特征串，
+# 会让 start 与 stop/status 在两次调用间拿到两种写法而对不上。
+if [ -n "${TRIM_APPDEST:-}" ] && [ -d "${TRIM_APPDEST}" ]; then
+    _real="$(readlink -f "${TRIM_APPDEST}" 2>/dev/null)"
+    [ -n "${_real}" ] && TRIM_APPDEST="${_real}"
+    unset _real
+fi
+
+if [ -z "${TRIM_APPDEST:-}" ] || [ ! -d "${TRIM_APPDEST}" ]; then
+    echo "无法定位应用目录（TRIM_APPDEST='${TRIM_APPDEST:-}'）" > "${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+    exit 1
+fi
+if [ -z "${TRIM_PKGVAR:-}" ]; then
+    echo "无法定位应用数据目录（TRIM_PKGVAR 为空）" > "${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+    exit 1
+fi
+
+APP_DIR="${TRIM_APPDEST}/server"
+DATA_DIR="${TRIM_PKGVAR}/data"
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+PID_FILE="${TRIM_PKGVAR}/app.pid"
+PORT="${TRIM_SERVICE_PORT:-8980}"
+APP_USER="${TRIM_USERNAME:-${APPNAME}}"
+APP_GROUP="${TRIM_GROUPNAME:-${APPNAME}}"
+
+# 进程特征串：用绝对路径，唯一标识本应用，不会误伤别的 node 进程。
+# 传参一律写 pgrep -f -- "$PATTERN"：模式以 '-' 开头时会被 procps 当成选项
+# 而报 invalid option，兜底判断与兜底清理会静默失效（真机吃过这个亏）。
+PATTERN="${APP_DIR}/${SERVICE_JS}"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}"
+}
+
+# 定位 Node 运行时。优先应用中心声明的 nodejs_v22，其次 v24，最后 PATH。
+resolve_node() {
+    local c
+    for c in /var/apps/nodejs_v22/target/bin/node /var/apps/nodejs_v24/target/bin/node; do
+        if [ -x "${c}" ]; then printf '%s' "${c}"; return 0; fi
+    done
+    c="$(command -v node 2>/dev/null)"
+    if [ -n "${c}" ]; then printf '%s' "${c}"; return 0; fi
+    return 1
+}
+
+check_process() {
+    pid_alive "$1"
+}
+
+# 判定 pid 是否还活着。
+# ⚠️ 不能只用 `kill -0`：以非属主身份调用时，它对【活着的】别人的进程返回
+# EPERM（rc=1），与"进程不存在"（ESRCH）在 shell 里完全没法区分 —— 会被误判成
+# 已退出，然后顺手删掉 pidfile，而 pidfile 是 fnOS 判定服务状态的依据之一。
+# 真机实测：以普通用户跑一次 `cmd/main status`，app.pid 就没了。
+# /proc/<pid> 的存在性判定与调用者权限无关，可靠得多。
+pid_alive() {
+    local pid="$1" cmd state
+    [ -n "${pid}" ] || return 1
+    [ -d "/proc/${pid}" ] || return 1
+    # 僵尸态（父进程尚未 wait）视作已退出，否则 stop 的等待循环会白白跑满 15 秒
+    state="$(cut -d' ' -f3 "/proc/${pid}/stat" 2>/dev/null)"
+    [ "${state}" = "Z" ] && return 1
+    cmd="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null)" || true
+    # 读不到 cmdline（权限）时不轻易判死，宁可认为还活着
+    [ -z "${cmd}" ] && return 0
+    case "${cmd}" in
+        *"${SERVICE_JS}"*) return 0 ;;
+    esac
+    return 1
+}
+
+status() {
+    if [ -f "${PID_FILE}" ]; then
+        local pid
+        pid="$(head -n 1 "${PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
+        if pid_alive "${pid}"; then
+            return 0
+        fi
+        # 只有确认这个 pid 真的不存在（或已被复用给别人）时才清 pidfile。
+        # 绝不在"存在但判不准"时删 —— 那等于替 fnOS 把状态文件弄丢。
+        if [ -z "${pid}" ] || [ ! -d "/proc/${pid}" ]; then
+            rm -f "${PID_FILE}"
+        fi
+    fi
+    # pidfile 丢失（外部 kill -9、异常掉电）时用进程特征兜底
+    if pgrep -f -- "${PATTERN}" > /dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+# 等端口真的开始监听再返回。只用 TCP 连接探测，不发任何字节——
+# 发 HTTP 请求会在应用日志里留 400，白噪音。
+wait_port() {
+    local limit="${1:-25}" i=0
+    while [ "${i}" -lt "${limit}" ]; do
+        if (exec 3<> "/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; then
+            return 0
+        fi
+        if ! status; then
+            log_msg "process exited before port ${PORT} became ready"
+            return 1
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    return 1
+}
+
+start_process() {
+    if status; then
+        log_msg "already running, skip start"
+        return 0
+    fi
+
+    local node_bin
+    if ! node_bin="$(resolve_node)"; then
+        echo "找不到 Node.js 运行时。本应用依赖应用中心的 Node.js v22（应用名 nodejs_v22），请先在应用中心确认它已安装。" > "${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+        log_msg "ERROR: no node runtime found"
+        return 1
+    fi
+
+    if [ ! -f "${APP_DIR}/${SERVICE_JS}" ]; then
+        echo "应用文件缺失：${APP_DIR}/${SERVICE_JS}" > "${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+        log_msg "ERROR: missing ${APP_DIR}/${SERVICE_JS}"
+        return 1
+    fi
+
+    mkdir -p "${DATA_DIR}/save" "${DATA_DIR}/logs" 2>/dev/null
+    # 以 root 创建出来的目录属主是 root，应用以 ${APP_USER} 运行会写不进去。
+    if [ "$(id -u)" = "0" ]; then
+        chown -R "${APP_USER}:${APP_GROUP}" "${DATA_DIR}" 2>/dev/null || true
+    fi
+
+    log_msg "starting: node=${node_bin} port=${PORT} data=${DATA_DIR}"
+
+    # 只注入部署级变量。刻意不注入 FROG_FAITHFUL 等引擎参数：
+    # server.js 的 envWithOverrides() 让真实环境变量盖过 data/config.json，
+    # 在这里写死会让 /admin 设置页里改的时长永远不生效。
+    local envs
+    envs="TZ='Asia/Shanghai' NODE_ENV='production' PORT='${PORT}' HOST='0.0.0.0' FROG_DATA_DIR='${DATA_DIR}'"
+
+    # 用 exec 让内层 bash 变成 node 本身，那么写进 pidfile 的 \$\$ 就是 node
+    # 的真实 pid。否则拿到的是 runuser / bash 包装层的 pid，stop 时杀不干净。
+    local launcher
+    launcher="echo \$\$ > '${PID_FILE}'; exec env ${envs} '${node_bin}' '${APP_DIR}/${SERVICE_JS}'"
+
+    cd "${APP_DIR}" || { log_msg "ERROR: cannot cd ${APP_DIR}"; return 1; }
+
+    if [ "$(id -un)" = "${APP_USER}" ]; then
+        bash -c "${launcher}" >> "${LOG_FILE}" 2>&1 &
+    else
+        runuser -u "${APP_USER}" -- bash -c "${launcher}" >> "${LOG_FILE}" 2>&1 &
+    fi
+
+    # pidfile 由内层 shell 写，给它最多 5 秒落地
+    local i=0
+    while [ "${i}" -lt 5 ]; do
+        [ -s "${PID_FILE}" ] && break
+        sleep 1
+        i=$((i + 1))
+    done
+    if [ ! -s "${PID_FILE}" ]; then
+        printf '%s' "$!" > "${PID_FILE}" 2>/dev/null || true
+    fi
+
+    if wait_port 25; then
+        log_msg "started, ${PORT} is listening (pid=$(head -n 1 "${PID_FILE}" 2>/dev/null | tr -d '[:space:]'))"
+        return 0
+    fi
+
+    log_msg "ERROR: ${PORT} not listening after 25s; tail: $(tail -n 5 "${LOG_FILE}" 2>/dev/null | tr '\n' '|')"
+    echo "启动后 25 秒内 ${PORT} 端口未监听，详情见 ${LOG_FILE}" > "${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+    return 1
+}
+
+stop_process() {
+    log_msg "stopping ..."
+
+    if [ -f "${PID_FILE}" ]; then
+        local pid count=0
+        pid="$(head -n 1 "${PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
+        if [ -n "${pid}" ] && check_process "${pid}"; then
+            log_msg "send TERM to ${pid}"
+            kill -TERM "${pid}" 2>/dev/null
+            while check_process "${pid}" && [ "${count}" -lt 15 ]; do
+                sleep 1
+                count=$((count + 1))
+            done
+            if check_process "${pid}"; then
+                log_msg "send KILL to ${pid}"
+                kill -KILL "${pid}" 2>/dev/null
+            fi
+        fi
+        rm -f "${PID_FILE}"
+    fi
+
+    # 兜底：清掉没有 pidfile 的残留实例（外部拉起过、或 pidfile 被删）
+    if pgrep -f -- "${PATTERN}" > /dev/null 2>&1; then
+        log_msg "cleaning leftover process by pattern"
+        pkill -TERM -f -- "${PATTERN}" 2>/dev/null || true
+        sleep 1
+        pkill -KILL -f -- "${PATTERN}" 2>/dev/null || true
+    fi
+
+    log_msg "stopped"
+    return 0
+}
+
+case "$1" in
+    start)
+        start_process
+        ;;
+    stop)
+        stop_process
+        ;;
+    status)
+        if status; then
+            exit 0
+        fi
+        exit 3
+        ;;
+    restart)
+        stop_process
+        start_process
+        ;;
+    *)
+        echo "usage: $0 {start|stop|status|restart}" > "${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+        exit 1
+        ;;
+esac

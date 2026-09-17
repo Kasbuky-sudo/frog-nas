@@ -1,0 +1,14 @@
+#!/bin/bash
+# 应用设置页改环境变量之后调用：重启服务让新变量生效。
+#
+# 用 ${CMD_DIR}/main 而不是 $0 —— 钩子里的 $0 是钩子自身，
+# 拿它去执行会把整个生命周期流程再递归跑一遍。
+
+APPNAME="frog-nas"
+CMD_DIR="/var/apps/${APPNAME}/cmd"
+
+if [ -x "${CMD_DIR}/main" ]; then
+    bash "${CMD_DIR}/main" restart > /dev/null 2>&1
+fi
+
+exit 0

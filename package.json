@@ -1,0 +1,24 @@
+{
+  "name": "frog-nas",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Run 《旅行青蛙·中国之旅》 offline (Egret H5) as a server-authoritative web app on a NAS, plus external push and AI-agent skills.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "fetch-source": "node scripts/fetch-source.js",
+    "test": "node --test \"test/unit/**/*.test.js\" \"test/integration/**/*.test.js\"",
+    "test:unit": "node --test \"test/unit/**/*.test.js\"",
+    "test:integration": "node --test \"test/integration/**/*.test.js\"",
+    "audit:network": "node scripts/network-audit.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}

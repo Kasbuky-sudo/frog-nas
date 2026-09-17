@@ -1,0 +1,39 @@
+# 《旅行青蛙·中国之旅》 NAS 部署
+#
+#   1. 先在宿主机准备游戏源（vendor/ 不进 git）：
+#        node scripts/fetch-source.js
+#   2. 启动：
+#        docker compose up -d --build
+#   3. 打开 http://<NAS_IP>:8980
+#
+# 存档/配置/日志全部在 ./data 里，重建容器不会丢失进度。
+#
+# 本 NAS / Docker 移植版：Kasbuky
+# 游戏本体著作权归 Hit-Point Co., Ltd.；离线版由 Balticx 制作。
+# 仅供个人学习与非商业保存，详见 README.md 的免责声明。
+
+services:
+  frog:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: frog-nas:1.0.0
+    container_name: frog-nas
+    restart: unless-stopped
+    # 镜像元数据（作者等）写在 Dockerfile 的 LABEL 里，docker inspect 可查。
+    ports:
+      - "8980:8980"
+    volumes:
+      # 唯一需要持久化的目录：存档、config.json（API token / 推送配置）、日志。
+      - ./data:/app/data
+    environment:
+      TZ: Asia/Shanghai
+      # 引擎时长开关。默认 1 = 原版真实时长（小时级）；改成 0 用离线版缩短时长。
+      # 设置页（/admin）也可以改，改完引擎会重启并重新读存档。
+      FROG_FAITHFUL: "1"
+      # 对外地址：推送里拼明信片图片的绝对链接用。留空则推送不带图片链接。
+      # 例：PUBLIC_URL: "http://192.168.1.10:8980"
+      # 也可以在 /admin 页面里设置（会优先用这里的值）。
+      # PUBLIC_URL: ""
+    # 健康检查已在 Dockerfile 里定义（GET /api/health）。
+    # 容器只会在推送时产生出站流量，见 docs/network-audit.md。

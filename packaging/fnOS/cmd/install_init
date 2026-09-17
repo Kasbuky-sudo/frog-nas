@@ -1,0 +1,26 @@
+#!/bin/bash
+# 安装前：包内容体检。
+#
+# 只在 TRIM_APPDEST 真的存在时才检查——install_init 是"安装前"钩子，
+# 此刻包可能还没解到目标目录。不判断存在性就直接报缺失，会把所有安装都拦下来。
+#
+# 这里失败比装上一个"图标点了没反应"的应用强，所以缺文件就明确报错。
+APPDEST="${TRIM_APPDEST:-/var/apps/frog-nas/target}"
+
+if [ ! -d "${APPDEST}" ]; then
+    exit 0
+fi
+
+missing=""
+for f in server/src/server.js server/package.json server/public/admin.html \
+         server/vendor/game/__offline-engine.js server/vendor/gameConfig.original.json \
+         ui/config; do
+    [ -f "${APPDEST}/${f}" ] || missing="${missing} ${f}"
+done
+
+if [ -n "${missing}" ]; then
+    echo "应用包内容不完整，缺少:${missing}" > "${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+    exit 1
+fi
+
+exit 0
