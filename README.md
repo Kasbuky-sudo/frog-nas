@@ -361,7 +361,7 @@ npm run audit:network             # 重新生成网络审计报告
 | [docs/source-map.md](docs/source-map.md) | 源包每个文件的作用、哪些被丢弃、引擎内部结构 |
 | [docs/protocol.md](docs/protocol.md) | wire 信封、握手时序、REST↔指令映射、推送事件表 |
 | [docs/first-load.md](docs/first-load.md) | 首屏 32.5 MB 是怎么算出来的、卡在哪、预载机制与实测结果 |
-| [docs/decisions.md](docs/decisions.md) | 74 条自行决策与 9 条已知限制 |
+| [docs/decisions.md](docs/decisions.md) | 74 条自行决策与 10 条已知限制 |
 | [docs/acceptance.md](docs/acceptance.md) | 验收清单的逐项自查（含未验证项与镜像体积实测） |
 
 ## 进设置页
