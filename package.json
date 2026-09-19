@@ -1,6 +1,6 @@
 {
   "name": "frog-nas",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "description": "Run 《旅行青蛙·中国之旅》 offline (Egret H5) as a server-authoritative web app on a NAS, plus external push and AI-agent skills.",
   "license": "UNLICENSED",
