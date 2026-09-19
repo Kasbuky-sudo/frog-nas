@@ -118,7 +118,7 @@ var process = { env: (global.FROG_CONFIG && global.FROG_CONFIG.env) || {} };
 | `FROG_TRAVEL_MIN` / `_MAX` | 12 / 40 分钟 | 3600 / 21600 秒 | 单次旅行时长 |
 | `FROG_IDLE_MIN` / `_MAX` | 2 / 6 分钟 | 60 / 180 秒 | 回家后再次出门的间隔 |
 | `FROG_WAIT_MIN` / `_MAX` | 3 / 8 分钟 | 60 / 180 秒 | 没备行李时的重试间隔 |
-| `FROG_DRIFT_MIN` / `_MAX` | 10 / 20 秒 | 同左 | 放浪（没带便当）回家时长 |
+| `FROG_DRIFT_MIN` / `_MAX` | 10 / 20 分钟（默认覆盖，见 D75） | 同左 | 放浪（没带便当）回家时长 |
 | `FROG_GUEST_ROLL` / `_CHANCE` | 60 秒 / 35% | 1800 秒 / 10% | 邻居访客掷骰 |
 | `FROG_VISITOR_*` | 由本项目决定 | — | 串门访客节奏（原版在服务端，无据可依） |
 | `FROG_LOTTERY_*`、`FROG_DRAWING_*`、`FROG_CRAFT_SEC`、`FROG_WISH_*`、`FROG_CAPSULE_*` | 见 `/admin` 页面 | — | 其余活动节奏 |

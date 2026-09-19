@@ -69,7 +69,23 @@ function defaults() {
     publicUrl: '',
     engine: {
       /** FROG_FAITHFUL=1 keeps the original multi-hour travel timings. */
-      env: { FROG_FAITHFUL: '1' },
+      env: {
+        FROG_FAITHFUL: '1',
+        /** 放浪 (stray: left with gear but no lunch box) return window.
+         *
+         *  The engine takes these two straight from define.json's
+         *  FROG_DRIFTRETURNTIME 10 / _MAX 20 and uses them as SECONDS, which makes
+         *  a whole depart+return cycle last 20 s + the 60-180 s idle wait -- the
+         *  "2 分钟走完一轮" the user reported. Every other trip length in this game
+         *  is minutes-to-hours (a normal trip is 3600-21600 s under FROG_FAITHFUL),
+         *  so the table reading that fits is MINUTES: 10-20 min is exactly the
+         *  "shorter outing" the engine's own comment says a stray trip is meant to
+         *  be. Set here rather than in vendor/ (which stays byte-identical to the
+         *  source package) because the engine already reads these from FROG_CONFIG.
+         *  Operators can retune on /admin; 0/'' disables the override. */
+        FROG_DRIFT_MIN: '600',
+        FROG_DRIFT_MAX: '1200',
+      },
     },
     push: {
       enabled: true,

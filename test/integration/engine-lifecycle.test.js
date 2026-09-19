@@ -192,3 +192,82 @@ suite('engine: export/import round-trips a save', () => {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(dir2, { recursive: true, force: true });
 });
+
+suite('engine: 放浪 (stray) trips are not seconds long', () => {
+  // WHY THIS TEST EXISTS: the user reported "青蛙出行和回家 的频率有时会异常，
+  // 具体而言就是可能会两分钟完成一次出门+回家的流程".
+  //
+  // A 放浪 trip -- gear in the bag but NO lunch box -- took its window from
+  // define.json's FROG_DRIFTRETURNTIME 10 / _MAX 20 read as SECONDS, and
+  // departFrog's Math.max(20, window) clamped every one of them to exactly 20 s.
+  // With the 60-180 s idle wait after coming home, a whole cycle was 80-200 s.
+  //
+  // The trigger is not exotic: tripPrepared() accepts ANY item in the bag, while
+  // provisionTrip() calls the trip stray unless a LUNCH BOX is present. Durable
+  // gear (tools, amulets) comes home again, so "desk has gear, the lunch box has
+  // been eaten" renews itself every trip -- the user's own save showed
+  // travel.minTripSec === 13, which is a fingerprint of this path.
+  //
+  // The fix is a default FROG_CONFIG override (src/settings.js, decision D75);
+  // vendor/ stays byte-identical. This test therefore asserts the SHIPPED defaults
+  // rather than a value the test invents, so it fails if the old 10/20 seconds
+  // ever comes back.
+
+  const { Settings } = require('../../src/settings');
+
+  /** The window + stray flag of one trip, under the env the server would pass. */
+  function tripWindow(env, bagItem) {
+    const dir = tmp();
+    const h = boot(dir, env);
+    h.dispatch('hall_enter_game', {});
+    h.dispatch('client_gm', { cmd: 'add_item ' + bagItem + ' 1' });
+    h.dispatch('item_putin_bag', { pos: 1, item_id: bagItem });
+    h.dispatch('client_gm', { cmd: 'travel_now' });
+    const st = h.state;
+    const out = {
+      window: (st.travel.returnAt || 0) - (st.travel.departAt || 0),
+      stray: !!(st.travel.plan && st.travel.plan.stray),
+    };
+    fs.rmSync(dir, { recursive: true, force: true });
+    return out;
+  }
+
+  /** The engine env the server passes: defaults from src/settings.js. */
+  function shippedEnv() {
+    const cfgDir = tmp();
+    const env = new Settings(cfgDir).engineEnv();
+    fs.rmSync(cfgDir, { recursive: true, force: true });
+    return env;
+  }
+
+  test('a stray trip lasts minutes, not seconds (item 2000 = 竹筒, a durable tool)', () => {
+    // A tool makes the bag "prepared" (so the frog actually leaves) while still
+    // yielding stray === true, because no lunch box is anywhere.
+    const stray = tripWindow(shippedEnv(), 2000);
+    assert.equal(stray.stray, true, 'a trip with a tool but no lunch box is 放浪');
+    assert.ok(stray.window >= 300,
+      'a 放浪 trip must last at least 5 minutes; got ' + stray.window + 's'
+      + ' -- define.json\'s 10/20 is being read as SECONDS again');
+    assert.ok(stray.window <= 3600,
+      'a 放浪 trip should still be the SHORT outing, under an hour; got ' + stray.window + 's');
+  });
+
+  test('a normal trip (with a lunch box) is unaffected and still multi-hour', () => {
+    // item 0 (奶油华夫饼) is a LUNCH BOX -> not stray.
+    const normal = tripWindow(shippedEnv(), 0);
+    assert.equal(normal.stray, false, 'a trip with a lunch box is not 放浪');
+    assert.ok(normal.window >= 3600,
+      'FROG_FAITHFUL=1 keeps a normal trip multi-hour; got ' + normal.window + 's');
+  });
+
+  test('the override is a config knob, not a code change: 0 falls back to the table', () => {
+    // Guards the escape hatch /admin documents. With the override off the engine
+    // uses the define.json values -- the very behaviour the shipped default exists
+    // to avoid -- so this pins that the knob really is what is doing the work.
+    const stray = tripWindow({ FROG_FAITHFUL: '1', FROG_DRIFT_MIN: '0', FROG_DRIFT_MAX: '0' }, 2000);
+    assert.equal(stray.stray, true);
+    assert.ok(stray.window <= 25,
+      'with the override off the old ~20 s window returns; got ' + stray.window + 's');
+  });
+});
+
