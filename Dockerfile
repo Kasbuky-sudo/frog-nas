@@ -24,7 +24,7 @@ LABEL org.opencontainers.image.title="旅行青蛙·中国之旅 NAS 版" \
       org.opencontainers.image.description="服务端权威的离线版移植：Docker 单容器网页应用 + 外部推送 + AI Skills" \
       org.opencontainers.image.authors="Kasbuky" \
       org.opencontainers.image.licenses="UNLICENSED (personal, non-commercial)" \
-      org.opencontainers.image.version="1.0.0" \
+      org.opencontainers.image.version="1.0.3" \
       org.opencontainers.image.source="local build" \
       org.opencontainers.image.documentation="/app/README.md"
 
