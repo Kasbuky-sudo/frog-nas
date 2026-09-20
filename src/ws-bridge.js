@@ -120,14 +120,19 @@ class WsBridge {
       return;
     }
 
+    // Nothing reaches the browser that its note book cannot render -- the client
+    // dereferences its own config for every row it is handed. See note-guard.js.
+    const noteGuard = require('./note-guard');
+
     // --- reply (session-correlated, only to the asker) ---
     if (msg.session != null) {
-      this.send(ws, { session: msg.session, data: out.reply || {} });
+      const data = noteGuard.sanitizeNotePayload(msg.cmd, out.reply || {});
+      this.send(ws, { session: msg.session, data: data || {} });
     } else if (out.reply !== undefined) {
       // An uncorrelated command still gets its reply in push form, exactly as the
       // in-page loopback did.
       const wire = this.toWire(msg.cmd);
-      this.send(ws, { cmd: wire, data: out.reply });
+      this.send(ws, { cmd: wire, data: noteGuard.sanitizeNotePayload(wire, out.reply) });
     }
 
     // --- engine pushes from this command ---
@@ -164,6 +169,10 @@ class WsBridge {
 
   /** Send to every connected client. This is what keeps two tabs in sync. */
   broadcast(obj) {
+    if (obj && obj.cmd) {
+      const safe = require('./note-guard').sanitizeNotePayload(obj.cmd, obj.data);
+      if (safe !== obj.data) obj = Object.assign({}, obj, { data: safe });
+    }
     const text = JSON.stringify(obj);
     let n = 0;
     for (const ws of this.clients) {

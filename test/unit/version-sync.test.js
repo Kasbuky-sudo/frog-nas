@@ -85,6 +85,17 @@ test('version: fnOS manifest 的 version 跟随 package.json', () => {
     'manifest 的 version 是 ' + m[1] + '，package.json 是 ' + VERSION);
 });
 
+test('version: OpenAPI 文档的 info.version 跟随 package.json', () => {
+  const s = read('src/openapi.js');
+  assert.ok(s, 'src/openapi.js 存在');
+  // info.version 缩进四格；上面还有 openapi: '3.0.3'（协议版本，不跟着走）。
+  const m = /^\s{4}version:\s*'([^']+)'/m.exec(s);
+  assert.ok(m, 'openapi.js 里有 info.version');
+  assert.equal(m[1], VERSION,
+    'openapi 的 info.version 是 ' + m[1] + '，package.json 是 ' + VERSION
+    + ' —— 这一处曾独自停在 1.0.2 没人管，现在由这条测试看着');
+});
+
 test('version: package-lock.json 跟随 package.json', () => {
   const s = read('package-lock.json');
   assert.ok(s, 'package-lock.json 存在');
