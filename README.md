@@ -149,6 +149,15 @@ fnconnect 中继只有 ~512 KB/s，就是 **65 秒**。所以第一版会出现"
 `localStorage.__frog_preload_off = '1'`。原理、实测数字与验证方法见
 [docs/first-load.md](docs/first-load.md)。
 
+### 在飞牛 App 里打开
+
+以前在**鸿蒙版飞牛 App** 里点开图标，游戏可能起不来：桌面页把游戏指向 `fnconnect`
+域名下的 `:8980`，整局游戏的资源都得走中继，限速链路上抢不到带宽就卡在加载。
+
+**飞牛 App 1.37.0 起已修复，可以正常打开游戏**（2026-09-20 实测确认）。App 还停在
+更早版本的话，升级到 1.37.0 或更高再试；如果仍然打不开，用手机浏览器直接开
+`http://<NAS_IP>:8980`（内网直连）就能分清是服务端问题还是链路问题。
+
 ---
 
 ## 推送配置
@@ -361,7 +370,7 @@ npm run audit:network             # 重新生成网络审计报告
 | [docs/source-map.md](docs/source-map.md) | 源包每个文件的作用、哪些被丢弃、引擎内部结构 |
 | [docs/protocol.md](docs/protocol.md) | wire 信封、握手时序、REST↔指令映射、推送事件表 |
 | [docs/first-load.md](docs/first-load.md) | 首屏 32.5 MB 是怎么算出来的、卡在哪、预载机制与实测结果 |
-| [docs/decisions.md](docs/decisions.md) | 74 条自行决策与 10 条已知限制 |
+| [docs/decisions.md](docs/decisions.md) | 75 条自行决策与 13 条已知限制 |
 | [docs/acceptance.md](docs/acceptance.md) | 验收清单的逐项自查（含未验证项与镜像体积实测） |
 
 ## 进设置页
