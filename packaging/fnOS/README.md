@@ -62,12 +62,27 @@ bash packaging/fnOS/scripts/build.sh
 
 环境变量：
 
-- `FNPACK` — fnpack 可执行文件路径，默认 `C:/Users/User/Desktop/FNOS/fnpack`
+- `FNPACK` — fnpack 可执行文件路径；不传则按「`.build.env` → PATH → 常见位置」查找，
+  都找不到会明确报错（不再回退到任何写死的目录）
+- `FROG_NODE` / `FROG_PY` — 打包自检用的 node / python；不传则用 PATH 里的
+  `node` / `python3`
+- `FROG_BUILD_ENV` — 覆盖本机配置文件位置，默认 `<仓库根>/.build.env`
 - `DEP_APPS` — 运行依赖声明，默认 `nodejs_v22`；传 `none` 产出**去掉依赖声明的
   变体** `dist/frog-nas-<version>-cli.fpk`（见下面「CLI 装不上」一节）
 - `SKIP_VERIFY=1` — 跳过打包后的"自跑验证"（不推荐，见下）
 - `VERIFY_PORT` — 自跑验证用的端口，默认 `18980`（**别用 8980**，本机可能已经有
   一个在跑的实例占着）
+
+**脚本里不写任何开发机的路径。** 需要固定工具位置时，在仓库根放一份 `.build.env`
+（已在 `.gitignore` 里，不进公开仓库）：
+
+```bash
+FROG_NODE=/path/to/node
+FROG_PY=/path/to/python3
+FNPACK=/path/to/fnpack
+```
+
+`build.sh` 与 `verify-fpk.sh` 都读它；不建也能跑——退回 PATH 里的同名命令。
 
 `build.sh` 在打包前后会自检，任何一条不过就直接失败：
 
@@ -171,7 +186,7 @@ sudo /usr/local/bin/appcenter-cli start frog-nas
 ### 次选：`trim-cli`（只在需要出 `-cli` 变体时用）
 
 ```bash
-CLI="C:\Users\User\.workbuddy\skills\trim-cli\bin\trim-cli-windows-x64.exe"
+CLI="<trim-cli>"      # trim-cli 不在 PATH 里就填它的绝对路径
 
 "$CLI" --profile x86nas --allow-insecure-ws app uninstall frog-nas --yes
 sleep 6

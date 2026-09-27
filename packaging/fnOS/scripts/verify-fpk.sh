@@ -19,23 +19,29 @@ set -euo pipefail
 
 export PATH="/usr/bin:/bin:/mingw64/bin:/c/Windows/System32:/c/Windows:${PATH:-}"
 
-MANAGED_NODE="C:/Users/User/.workbuddy/binaries/node/versions/22.22.2-3/node.exe"
-MANAGED_PY="C:/Users/User/.workbuddy/binaries/python/versions/3.13.12/python.exe"
-
-NODE=""
-for c in node "${MANAGED_NODE}"; do
-    if [ -x "$c" ] 2>/dev/null || command -v "$c" > /dev/null 2>&1; then NODE="$c"; break; fi
-done
-PY=""
-for c in python3 python "${MANAGED_PY}"; do
-    if [ -x "$c" ] 2>/dev/null || command -v "$c" > /dev/null 2>&1; then PY="$c"; break; fi
-done
-[ -n "${NODE}" ] || { echo "找不到 node" >&2; exit 1; }
-[ -n "${PY}" ]   || { echo "找不到 python" >&2; exit 1; }
-
+# ---- 机器相关路径：同 build.sh，一律来自环境变量 / 仓库根的 .build.env --------
+# （脚本里不写任何开发机目录；换台机器靠 PATH 里的 node / python3 也能跑。）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # scripts/ -> fnOS/ -> packaging/ -> 仓库根，要退三层。
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+
+BUILD_ENV="${FROG_BUILD_ENV:-${REPO_ROOT}/.build.env}"
+if [ -f "${BUILD_ENV}" ]; then
+    . <(tr -d '\r' < "${BUILD_ENV}")
+fi
+
+NODE=""
+for c in "${FROG_NODE:-}" node nodejs; do
+    [ -n "$c" ] || continue
+    if [ -x "$c" ] 2>/dev/null || command -v "$c" > /dev/null 2>&1; then NODE="$c"; break; fi
+done
+PY=""
+for c in "${FROG_PY:-}" python3 python; do
+    [ -n "$c" ] || continue
+    if [ -x "$c" ] 2>/dev/null || command -v "$c" > /dev/null 2>&1; then PY="$c"; break; fi
+done
+[ -n "${NODE}" ] || { echo "找不到 node：放进 PATH，或写进 .build.env 的 FROG_NODE=" >&2; exit 1; }
+[ -n "${PY}" ]   || { echo "找不到 python：放进 PATH，或写进 .build.env 的 FROG_PY=" >&2; exit 1; }
 
 FPK="${1:-}"
 if [ -z "${FPK}" ]; then

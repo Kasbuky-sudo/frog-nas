@@ -8,7 +8,7 @@
 # 版本号唯一来源是 package.json 的 version，这里不再维护第二份。
 #
 # 环境变量：
-#   FNPACK=<fnpack 可执行文件路径>   默认 C:/Users/User/Desktop/FNOS/fnpack
+#   FNPACK=<fnpack 可执行文件路径>   默认按 .build.env → PATH → 常见位置查找
 #   DEP_APPS=<应用名|none>          默认 nodejs_v22；none = 去掉依赖声明
 #   VERIFY_PORT=<port>              自跑验证端口，默认 18980
 #   SKIP_VERIFY=1                   跳过自跑验证（不推荐）
@@ -36,41 +36,58 @@ set -euo pipefail
 # 本机 Git Bash 的 PATH 可能是空的，先兜住基础命令（cygpath/sha256sum/find 都在 /usr/bin）。
 export PATH="/usr/bin:/bin:/mingw64/bin:/c/Windows/System32:/c/Windows:${PATH:-}"
 
-MANAGED_NODE="C:/Users/User/.workbuddy/binaries/node/versions/22.22.2-3/node.exe"
-MANAGED_PY="C:/Users/User/.workbuddy/binaries/python/versions/3.13.12/python.exe"
-
-# 本机这套 shim 下 `command -v node` / `command -v npm` 一律解析失败
-# （MSYS 不认 .exe / .cmd 的裸名），所以只认绝对路径候选，别用 command -v。
-# 顺序：PATH 里的可用名（给别的机器留活路）→ 托管运行时。
-NODE=""
-for c in node "${MANAGED_NODE}"; do
-    if [ -x "$c" ] 2>/dev/null || command -v "$c" > /dev/null 2>&1; then NODE="$c"; break; fi
-done
-
-PY=""
-for c in python3 python "${MANAGED_PY}"; do
-    if [ -x "$c" ] 2>/dev/null || command -v "$c" > /dev/null 2>&1; then PY="$c"; break; fi
-done
-[ -n "${NODE}" ] || { echo "找不到 node（打包前的依赖自检需要）" >&2; exit 1; }
-[ -n "${PY}" ] || { echo "找不到 python（打包后自检需要，仅用标准库 tarfile）" >&2; exit 1; }
-
+# ---- 机器相关路径：一律来自环境变量，脚本里不写任何开发机目录 ---------------
+# 想固定写死就放一份 .build.env 在仓库根（已 gitignore，不进公开仓库）：
+#     FROG_NODE=/path/to/node    FROG_PY=/path/to/python3    FNPACK=/path/to/fnpack
+# 换台机器不建这个文件也能跑，只要 node / python3 / fnpack 在 PATH 里。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${PKG_DIR}/../.." && pwd)"
 APPNAME="frog-nas"
 
+BUILD_ENV="${FROG_BUILD_ENV:-${REPO_ROOT}/.build.env}"
+if [ -f "${BUILD_ENV}" ]; then
+    # tr 掉 CR：Windows 编辑器存的 CRLF 会让路径尾巴多一个 \r
+    . <(tr -d '\r' < "${BUILD_ENV}")
+fi
+
+# 解析顺序：环境变量（含 .build.env）→ PATH。Git Bash 的 MSYS 不认 .exe/.cmd
+# 裸名，所以那台机器上必须靠 .build.env 给绝对路径，别指望 command -v。
+NODE=""
+for c in "${FROG_NODE:-}" node nodejs; do
+    [ -n "$c" ] || continue
+    if [ -x "$c" ] 2>/dev/null || command -v "$c" > /dev/null 2>&1; then NODE="$c"; break; fi
+done
+
+PY=""
+for c in "${FROG_PY:-}" python3 python; do
+    [ -n "$c" ] || continue
+    if [ -x "$c" ] 2>/dev/null || command -v "$c" > /dev/null 2>&1; then PY="$c"; break; fi
+done
+[ -n "${NODE}" ] || { echo "找不到 node（打包前依赖自检需要）：放进 PATH，或写进 .build.env 的 FROG_NODE=" >&2; exit 1; }
+[ -n "${PY}" ] || { echo "找不到 python（打包后自检需要，仅用标准库 tarfile）：放进 PATH，或写进 .build.env 的 FROG_PY=" >&2; exit 1; }
+
 STAGING_ROOT="${REPO_ROOT}/.build-staging"
 STAGING="${STAGING_ROOT}/${APPNAME}"
 DIST="${REPO_ROOT}/dist"
 
-FNPACK="${FNPACK:-}"
-if [ -z "${FNPACK}" ]; then
+# fnpack：环境变量 / .build.env → PATH → 常见位置。找不到就明确报错，别再回退到
+# 任何写死的目录（脚本里不该出现开发机的路径）。
+if [ -z "${FNPACK:-}" ]; then
     if command -v fnpack > /dev/null 2>&1; then
         FNPACK="fnpack"
     else
-        FNPACK="C:/Users/User/Desktop/FNOS/fnpack"
+        for c in "${REPO_ROOT}/tools/fnpack/fnpack" "${HOME:-}/fnpack/fnpack" /usr/local/bin/fnpack; do
+            [ -x "$c" ] && { FNPACK="$c"; break; }
+        done
     fi
 fi
+[ -n "${FNPACK:-}" ] || {
+    echo "找不到 fnpack（打 .fpk 用）。三种办法任选：" >&2
+    echo "  1) 放进 PATH；2) 用 FNPACK=/path/to/fnpack 指定；" >&2
+    echo "  3) 写进仓库根的 .build.env（已 gitignore）：FNPACK=/path/to/fnpack" >&2
+    exit 1
+}
 
 VERSION="$(grep -m1 '"version"' "${REPO_ROOT}/package.json" | sed 's/.*: *"\([^"]*\)".*/\1/')"
 [ -n "${VERSION}" ] || { echo "无法从 package.json 读取 version" >&2; exit 1; }
