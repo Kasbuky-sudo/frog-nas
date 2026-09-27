@@ -212,6 +212,16 @@ fi
 echo "==> 复制 vendor/ (游戏源)"
 cp -R "${REPO_ROOT}/vendor" "${SERVER}/vendor"
 
+# 这两个文件是移植期我们自己写的（引擎 bundle 与离线壳），里面有大量设计旁注
+# ——"为什么这条规则是这样、当时实测到什么、哪个客户端函数逼出这个决定"。
+# 放在仓库里是好事，跟着 .fpk 发出去就变成把工作笔记公开了（包谁都能下载解开看）。
+# 所以只剥暂存副本：源目录与 vendor/ 保持逐字节不变，出包永远是干净的。
+echo "==> 剥离引擎/探针里的开发旁注"
+for f in "${SERVER}/vendor/game/__offline-engine.js" "${SERVER}/vendor/game/__probe.js"; do
+    node "${SCRIPT_DIR}/strip-comments.js" "$f" --keep-first-block || {
+        echo "剥离失败: $f" >&2; exit 1; }
+done
+
 # ---- 打包 ------------------------------------------------------------------
 echo "==> fnpack build"
 rm -f "${STAGING_ROOT}/${APPNAME}.fpk"
