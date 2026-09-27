@@ -38,17 +38,20 @@ const { spawn } = require('child_process');
 const ROOT = path.resolve(__dirname, '..', '..');
 
 /* ------------------------------------------------------------------ playwright */
+/* 仓库里没装 playwright 时，用 PLAYWRIGHT_CORE_DIR=<某个 node_modules> 指过去；
+   都没有就交给 Node 自己的解析（全局安装 / 上层目录 / NODE_PATH 都算）。
+   这里不写任何机器相关的路径。 */
 function loadPlaywright() {
   const candidates = [
     process.env.PLAYWRIGHT_CORE_DIR,
     path.join(ROOT, 'node_modules'),
-    path.join(os.homedir(), '.workbuddy', 'binaries', 'node', 'workspace', 'node_modules'),
   ].filter(Boolean);
   for (const dir of candidates) {
     try {
       return require(require.resolve('playwright-core', { paths: [dir] }));
     } catch (e) { /* try the next one */ }
   }
+  try { return require('playwright-core'); } catch (e) { /* not installed anywhere */ }
   return null;
 }
 
